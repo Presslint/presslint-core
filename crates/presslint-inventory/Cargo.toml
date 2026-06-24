@@ -9,8 +9,8 @@ description = "Queryable PDF page-object inventory for presslint-core."
 
 [dependencies]
 presslint-core.workspace = true
+presslint-syntax.workspace = true
 serde.workspace = true
 
 [lints]
 workspace = true
-
