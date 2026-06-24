@@ -116,6 +116,221 @@ pub enum Keyword {
     StreamEnd,
 }
 
+/// Tokenization failure with source range.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TokenizeError {
+    /// Error class.
+    pub kind: TokenizeErrorKind,
+    /// Source range that caused the error.
+    pub range: ByteRange,
+}
+
+/// Structured tokenizer error class.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TokenizeErrorKind {
+    /// A literal string opened with `(` but did not close.
+    UnterminatedLiteralString,
+    /// A hexadecimal string opened with `<` but did not close.
+    UnterminatedHexString,
+}
+
+/// Tokenize a PDF content byte stream into source-preserving lexical tokens.
+///
+/// This is a lexical scanner only. Token values remain encoded in the source
+/// bytes and are addressed through each token's byte range.
+///
+/// # Errors
+///
+/// Returns a [`TokenizeError`] when a string token is unterminated.
+pub fn tokenize(input: &[u8]) -> Result<Vec<Token>, TokenizeError> {
+    let mut tokens = Vec::new();
+    let mut offset = 0;
+
+    while offset < input.len() {
+        let byte = input[offset];
+        if is_whitespace(byte) {
+            let start = offset;
+            offset += 1;
+            while offset < input.len() && is_whitespace(input[offset]) {
+                offset += 1;
+            }
+            tokens.push(Token::new(
+                TokenKind::Trivia(TriviaKind::Whitespace),
+                ByteRange { start, end: offset },
+            ));
+        } else if byte == b'%' {
+            let start = offset;
+            offset += 1;
+            while offset < input.len() && input[offset] != b'\r' && input[offset] != b'\n' {
+                offset += 1;
+            }
+            tokens.push(Token::new(
+                TokenKind::Trivia(TriviaKind::Comment),
+                ByteRange { start, end: offset },
+            ));
+        } else if byte == b'(' {
+            let end = scan_literal_string(input, offset)?;
+            tokens.push(Token::new(
+                TokenKind::String(StringKind::Literal),
+                ByteRange { start: offset, end },
+            ));
+            offset = end;
+        } else if byte == b'<' && input.get(offset + 1) != Some(&b'<') {
+            let end = scan_hex_string(input, offset)?;
+            tokens.push(Token::new(
+                TokenKind::String(StringKind::Hexadecimal),
+                ByteRange { start: offset, end },
+            ));
+            offset = end;
+        } else if let Some((kind, end)) = scan_delimiter(input, offset) {
+            tokens.push(Token::new(
+                TokenKind::Delimiter(kind),
+                ByteRange { start: offset, end },
+            ));
+            offset = end;
+        } else {
+            let start = offset;
+            offset += 1;
+            while offset < input.len()
+                && !is_whitespace(input[offset])
+                && !is_delimiter(input[offset])
+            {
+                offset += 1;
+            }
+            tokens.push(Token::new(
+                classify_regular_token(&input[start..offset]),
+                ByteRange { start, end: offset },
+            ));
+        }
+    }
+
+    Ok(tokens)
+}
+
+fn scan_literal_string(input: &[u8], start: usize) -> Result<usize, TokenizeError> {
+    let mut offset = start + 1;
+    let mut depth = 1_u32;
+
+    while offset < input.len() {
+        match input[offset] {
+            b'\\' => {
+                offset = offset.saturating_add(2);
+            }
+            b'(' => {
+                depth += 1;
+                offset += 1;
+            }
+            b')' => {
+                depth -= 1;
+                offset += 1;
+                if depth == 0 {
+                    return Ok(offset);
+                }
+            }
+            _ => offset += 1,
+        }
+    }
+
+    Err(TokenizeError {
+        kind: TokenizeErrorKind::UnterminatedLiteralString,
+        range: ByteRange {
+            start,
+            end: input.len(),
+        },
+    })
+}
+
+fn scan_hex_string(input: &[u8], start: usize) -> Result<usize, TokenizeError> {
+    let mut offset = start + 1;
+    while offset < input.len() {
+        if input[offset] == b'>' {
+            return Ok(offset + 1);
+        }
+        offset += 1;
+    }
+
+    Err(TokenizeError {
+        kind: TokenizeErrorKind::UnterminatedHexString,
+        range: ByteRange {
+            start,
+            end: input.len(),
+        },
+    })
+}
+
+fn scan_delimiter(input: &[u8], offset: usize) -> Option<(Delimiter, usize)> {
+    match input[offset] {
+        b'[' => Some((Delimiter::ArrayOpen, offset + 1)),
+        b']' => Some((Delimiter::ArrayClose, offset + 1)),
+        b'<' if input.get(offset + 1) == Some(&b'<') => {
+            Some((Delimiter::DictionaryOpen, offset + 2))
+        }
+        b'>' if input.get(offset + 1) == Some(&b'>') => {
+            Some((Delimiter::DictionaryClose, offset + 2))
+        }
+        _ => None,
+    }
+}
+
+fn classify_regular_token(bytes: &[u8]) -> TokenKind {
+    match bytes {
+        b"true" | b"false" => TokenKind::Boolean,
+        b"null" => TokenKind::Null,
+        b"obj" => TokenKind::Keyword(Keyword::ObjectBegin),
+        b"endobj" => TokenKind::Keyword(Keyword::ObjectEnd),
+        b"stream" => TokenKind::Keyword(Keyword::StreamBegin),
+        b"endstream" => TokenKind::Keyword(Keyword::StreamEnd),
+        _ if bytes.first() == Some(&b'/') => TokenKind::Name,
+        _ if is_number_lexeme(bytes) => {
+            if bytes.contains(&b'.') {
+                TokenKind::Number(NumberKind::Real)
+            } else {
+                TokenKind::Number(NumberKind::Integer)
+            }
+        }
+        _ => TokenKind::Operator,
+    }
+}
+
+fn is_number_lexeme(bytes: &[u8]) -> bool {
+    if bytes.is_empty() {
+        return false;
+    }
+
+    let mut offset = 0;
+    if matches!(bytes[offset], b'+' | b'-') {
+        offset += 1;
+    }
+    if offset == bytes.len() {
+        return false;
+    }
+
+    let mut saw_digit = false;
+    let mut saw_dot = false;
+    while offset < bytes.len() {
+        match bytes[offset] {
+            b'0'..=b'9' => saw_digit = true,
+            b'.' if !saw_dot => saw_dot = true,
+            _ => return false,
+        }
+        offset += 1;
+    }
+
+    saw_digit
+}
+
+const fn is_whitespace(byte: u8) -> bool {
+    matches!(byte, 0x00 | b'\t' | b'\n' | 0x0c | b'\r' | b' ')
+}
+
+const fn is_delimiter(byte: u8) -> bool {
+    matches!(
+        byte,
+        b'(' | b')' | b'<' | b'>' | b'[' | b']' | b'{' | b'}' | b'/' | b'%'
+    )
+}
+
 /// Return the input bytes unchanged.
 ///
 /// This placeholder makes the round-trip contract explicit before the real
@@ -128,8 +343,8 @@ pub fn serialize_unmodified(input: &[u8]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Delimiter, Keyword, NumberKind, StringKind, Token, TokenKind, TriviaKind,
-        serialize_unmodified,
+        Delimiter, Keyword, NumberKind, StringKind, Token, TokenKind, TokenizeErrorKind,
+        TriviaKind, serialize_unmodified, tokenize,
     };
     use presslint_core::ByteRange;
 
@@ -182,5 +397,93 @@ mod tests {
         ];
 
         assert_eq!(kinds.len(), 18);
+    }
+
+    #[test]
+    fn tokenizer_preserves_ranges_for_common_content_tokens() -> Result<(), String> {
+        let input = b"q\n/DeviceRGB cs [1 -2.5 .75] << /K (v\\)x) /H <4E6F> >> Do\n% note\n";
+        let tokens = tokenize(input).map_err(|error| format!("{error:?}"))?;
+        let observed: Option<Vec<(TokenKind, &[u8])>> = tokens
+            .iter()
+            .map(|token| Some((token.kind, token.source_bytes(input)?)))
+            .collect();
+
+        assert_eq!(
+            observed,
+            Some(vec![
+                (TokenKind::Operator, &b"q"[..]),
+                (TokenKind::Trivia(TriviaKind::Whitespace), &b"\n"[..]),
+                (TokenKind::Name, &b"/DeviceRGB"[..]),
+                (TokenKind::Trivia(TriviaKind::Whitespace), &b" "[..]),
+                (TokenKind::Operator, &b"cs"[..]),
+                (TokenKind::Trivia(TriviaKind::Whitespace), &b" "[..]),
+                (TokenKind::Delimiter(Delimiter::ArrayOpen), &b"["[..]),
+                (TokenKind::Number(NumberKind::Integer), &b"1"[..]),
+                (TokenKind::Trivia(TriviaKind::Whitespace), &b" "[..]),
+                (TokenKind::Number(NumberKind::Real), &b"-2.5"[..]),
+                (TokenKind::Trivia(TriviaKind::Whitespace), &b" "[..]),
+                (TokenKind::Number(NumberKind::Real), &b".75"[..]),
+                (TokenKind::Delimiter(Delimiter::ArrayClose), &b"]"[..]),
+                (TokenKind::Trivia(TriviaKind::Whitespace), &b" "[..]),
+                (TokenKind::Delimiter(Delimiter::DictionaryOpen), &b"<<"[..]),
+                (TokenKind::Trivia(TriviaKind::Whitespace), &b" "[..]),
+                (TokenKind::Name, &b"/K"[..]),
+                (TokenKind::Trivia(TriviaKind::Whitespace), &b" "[..]),
+                (TokenKind::String(StringKind::Literal), &b"(v\\)x)"[..]),
+                (TokenKind::Trivia(TriviaKind::Whitespace), &b" "[..]),
+                (TokenKind::Name, &b"/H"[..]),
+                (TokenKind::Trivia(TriviaKind::Whitespace), &b" "[..]),
+                (TokenKind::String(StringKind::Hexadecimal), &b"<4E6F>"[..]),
+                (TokenKind::Trivia(TriviaKind::Whitespace), &b" "[..]),
+                (TokenKind::Delimiter(Delimiter::DictionaryClose), &b">>"[..]),
+                (TokenKind::Trivia(TriviaKind::Whitespace), &b" "[..]),
+                (TokenKind::Operator, &b"Do"[..]),
+                (TokenKind::Trivia(TriviaKind::Whitespace), &b"\n"[..]),
+                (TokenKind::Trivia(TriviaKind::Comment), &b"% note"[..]),
+                (TokenKind::Trivia(TriviaKind::Whitespace), &b"\n"[..]),
+            ])
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn tokenizer_recognizes_boolean_null_and_object_keywords() -> Result<(), String> {
+        let input = b"true false null obj endobj stream endstream";
+        let kinds: Vec<TokenKind> = tokenize(input)
+            .map_err(|error| format!("{error:?}"))?
+            .into_iter()
+            .filter(|token| !matches!(token.kind, TokenKind::Trivia(_)))
+            .map(|token| token.kind)
+            .collect();
+
+        assert_eq!(
+            kinds,
+            vec![
+                TokenKind::Boolean,
+                TokenKind::Boolean,
+                TokenKind::Null,
+                TokenKind::Keyword(Keyword::ObjectBegin),
+                TokenKind::Keyword(Keyword::ObjectEnd),
+                TokenKind::Keyword(Keyword::StreamBegin),
+                TokenKind::Keyword(Keyword::StreamEnd),
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn tokenizer_reports_unterminated_strings() -> Result<(), String> {
+        let Err(literal) = tokenize(b"(unterminated") else {
+            return Err("literal string unexpectedly tokenized".to_owned());
+        };
+        let Err(hex) = tokenize(b"<4E6F") else {
+            return Err("hex string unexpectedly tokenized".to_owned());
+        };
+
+        assert_eq!(literal.kind, TokenizeErrorKind::UnterminatedLiteralString);
+        assert_eq!(literal.range, ByteRange { start: 0, end: 13 });
+        assert_eq!(hex.kind, TokenizeErrorKind::UnterminatedHexString);
+        assert_eq!(hex.range, ByteRange { start: 0, end: 5 });
+        Ok(())
     }
 }
