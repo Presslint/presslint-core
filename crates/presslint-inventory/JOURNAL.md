@@ -3,6 +3,9 @@
 ## Current State
 
 - Defines deterministic inventory and inventory-entry data contracts.
+- The crate root is a small public facade over focused internal modules for
+  inventory builders, graphics-state walking, digest stability, operand
+  parsing, and tests.
 - Includes the first graphics-state walker over
   `presslint-syntax::OperatorRecord`.
 - The walker emits ordered events with operator and record byte provenance.
