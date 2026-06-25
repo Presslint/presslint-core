@@ -4,7 +4,7 @@
 
 use presslint_core::{
     BoundingBox, ByteRange, ColorObservation, ColorSpace, ColorUsage, ContentScope, EditCapability,
-    ObjectId, ObjectKind, PageIndex, Provenance,
+    ObjectId, ObjectKind, PageIndex, PdfName, Provenance,
 };
 use presslint_syntax::OperatorRecord;
 use serde::{Deserialize, Serialize};
@@ -83,6 +83,34 @@ pub fn build_text_inventory(
 ) -> Result<Inventory, GraphicsWalkError> {
     let events = walk_graphics_state(source, records)?;
     Ok(text_inventory_from_graphics_events(page, scope, &events))
+}
+
+/// Build image inventory entries from assembled content-stream operators.
+///
+/// This slice recognizes `Do` `XObject` invocations but emits image entries
+/// only for resource names the caller has already classified as image
+/// `XObjects`.
+/// Resource dictionaries, image streams, filters, and bounds are intentionally
+/// not inspected here.
+///
+/// # Errors
+///
+/// Returns a structured graphics-state walker error for malformed records in
+/// the supported operator set or invalid source ranges.
+pub fn build_image_inventory(
+    source: &[u8],
+    records: &[OperatorRecord],
+    page: PageIndex,
+    scope: &ContentScope,
+    image_xobject_names: &[PdfName],
+) -> Result<Inventory, GraphicsWalkError> {
+    let events = walk_graphics_state(source, records)?;
+    Ok(image_inventory_from_graphics_events(
+        page,
+        scope,
+        &events,
+        image_xobject_names,
+    ))
 }
 
 /// Build vector inventory entries from graphics-state events.
@@ -185,6 +213,54 @@ pub fn text_inventory_from_graphics_events(
             bounds: None,
             colors,
             capabilities,
+        });
+    }
+
+    Inventory { entries }
+}
+
+/// Build image inventory entries from graphics-state events.
+///
+/// Only `Do` invocations whose resource names appear in `image_xobject_names`
+/// become `ObjectKind::Image` entries. Other `XObject` invocations are
+/// preserved as walker events but skipped by this inventory slice.
+#[must_use]
+pub fn image_inventory_from_graphics_events(
+    page: PageIndex,
+    scope: &ContentScope,
+    events: &[GraphicsStateEvent],
+    image_xobject_names: &[PdfName],
+) -> Inventory {
+    let mut entries = Vec::new();
+
+    for event in events {
+        let GraphicsStateEventKind::XObjectInvoke { name } = &event.kind else {
+            continue;
+        };
+        if !image_xobject_names.contains(name) {
+            continue;
+        }
+
+        let sequence = usize_to_u32(entries.len());
+        let provenance = Provenance {
+            page,
+            scope: scope.clone(),
+            range: Some(event.record_range),
+        };
+        let colors = vec![image_color_observation()];
+        let digest = image_object_digest(page, sequence, scope, event, name, &colors);
+
+        entries.push(InventoryEntry {
+            id: ObjectId {
+                page,
+                sequence,
+                digest,
+            },
+            kind: ObjectKind::Image,
+            provenance,
+            bounds: None,
+            colors,
+            capabilities: vec![EditCapability::ReadOnly],
         });
     }
 
@@ -425,6 +501,11 @@ pub enum GraphicsStateEventKind {
         /// Active text rendering mode for this text-showing operation.
         rendering_mode: TextRenderingMode,
     },
+    /// `Do` invoked an `XObject` resource by name.
+    XObjectInvoke {
+        /// Resource name operand without the leading slash.
+        name: PdfName,
+    },
     /// Operator outside this walker slice; state is unchanged.
     NoOp,
 }
@@ -480,6 +561,13 @@ pub enum GraphicsWalkErrorKind {
     },
     /// A supported operator operand was not a single numeric lexeme.
     MalformedNumericOperand {
+        /// Operator name as source bytes.
+        operator: Vec<u8>,
+        /// Zero-based operand index.
+        operand_index: usize,
+    },
+    /// A supported operator operand was not a single PDF name lexeme.
+    MalformedNameOperand {
         /// Operator name as source bytes.
         operator: Vec<u8>,
         /// Zero-based operand index.
@@ -639,6 +727,9 @@ impl GraphicsStateWalker {
                 3,
                 self.state.text_rendering_mode,
             ),
+            b"Do" => Ok(GraphicsStateEventKind::XObjectInvoke {
+                name: name_operand(source, operator, record)?,
+            }),
             _ => Ok(GraphicsStateEventKind::NoOp),
         }
     }
@@ -770,6 +861,15 @@ fn text_capabilities(colors: &[ColorObservation]) -> Vec<EditCapability> {
     }
 }
 
+const fn image_color_observation() -> ColorObservation {
+    ColorObservation {
+        usage: ColorUsage::Image,
+        space: ColorSpace::Unknown,
+        components: Vec::new(),
+        spot_name: None,
+    }
+}
+
 fn vector_object_digest(
     page: PageIndex,
     sequence: u32,
@@ -812,6 +912,29 @@ fn text_object_digest(
     digest.push_range(event.operator_range);
     digest.push_u8(text_show_operator_tag(operator));
     digest.push_text_rendering_mode(rendering_mode);
+    for color in colors {
+        digest.push_color_observation(color);
+    }
+    digest.finish()
+}
+
+fn image_object_digest(
+    page: PageIndex,
+    sequence: u32,
+    scope: &ContentScope,
+    event: &GraphicsStateEvent,
+    name: &PdfName,
+    colors: &[ColorObservation],
+) -> [u8; 32] {
+    let mut digest = StableDigest::new();
+    digest.push_bytes(b"presslint.image.v1");
+    digest.push_u32(page.0);
+    digest.push_u32(sequence);
+    digest.push_scope(scope);
+    digest.push_usize(event.index);
+    digest.push_range(event.record_range);
+    digest.push_range(event.operator_range);
+    digest.push_bytes(&name.0);
     for color in colors {
         digest.push_color_observation(color);
     }
@@ -1074,6 +1197,35 @@ fn integer_operand(
     Ok(value as i32)
 }
 
+fn name_operand(
+    source: &[u8],
+    operator: &[u8],
+    record: &OperatorRecord,
+) -> Result<PdfName, GraphicsWalkError> {
+    expect_operands(operator, record, 1)?;
+    let operand = &record.operands[0];
+    if operand.tokens.len() != 1 {
+        return Err(GraphicsWalkError::new(
+            GraphicsWalkErrorKind::MalformedNameOperand {
+                operator: operator.to_vec(),
+                operand_index: 0,
+            },
+            operand.range,
+        ));
+    }
+    let bytes = checked_source(source, operand.range, operand.range)?;
+    if bytes.len() <= 1 || bytes[0] != b'/' {
+        return Err(GraphicsWalkError::new(
+            GraphicsWalkErrorKind::MalformedNameOperand {
+                operator: operator.to_vec(),
+                operand_index: 0,
+            },
+            operand.range,
+        ));
+    }
+    Ok(PdfName(bytes[1..].to_vec()))
+}
+
 fn numeric_operands_vec(
     source: &[u8],
     operator: &[u8],
@@ -1152,8 +1304,8 @@ mod tests {
 
     use super::{
         GraphicsStateEventKind, GraphicsStateWalker, GraphicsWalkError, GraphicsWalkErrorKind,
-        Inventory, PathPaintKind, TextRenderingMode, TextShowOperator, build_text_inventory,
-        build_vector_inventory, walk_graphics_state,
+        Inventory, PathPaintKind, TextRenderingMode, TextShowOperator, build_image_inventory,
+        build_text_inventory, build_vector_inventory, walk_graphics_state,
     };
 
     fn walk(input: &[u8]) -> Result<Vec<super::GraphicsStateEvent>, GraphicsWalkError> {
@@ -1189,6 +1341,17 @@ mod tests {
         let tokens = tokenize(input).map_err(|error| format!("{error:?}"))?;
         let assembled = assemble_operators(&tokens).map_err(|error| format!("{error:?}"))?;
         build_text_inventory(input, &assembled.records, PageIndex(2), scope)
+            .map_err(|error| format!("{error:?}"))
+    }
+
+    fn image_inventory(
+        input: &[u8],
+        scope: &ContentScope,
+        image_names: &[PdfName],
+    ) -> Result<Inventory, String> {
+        let tokens = tokenize(input).map_err(|error| format!("{error:?}"))?;
+        let assembled = assemble_operators(&tokens).map_err(|error| format!("{error:?}"))?;
+        build_image_inventory(input, &assembled.records, PageIndex(2), scope, image_names)
             .map_err(|error| format!("{error:?}"))
     }
 
@@ -1281,6 +1444,24 @@ mod tests {
     }
 
     #[test]
+    fn do_operator_emits_xobject_invocation_event() -> Result<(), String> {
+        let events = walk(b"/Im1 Do").map_err(|error| format!("{error:?}"))?;
+
+        assert_eq!(
+            events[0].kind,
+            GraphicsStateEventKind::XObjectInvoke {
+                name: PdfName(b"Im1".to_vec()),
+            }
+        );
+        assert_eq!(events[0].record_range, ByteRange { start: 0, end: 7 });
+        assert_eq!(
+            events[0].state,
+            super::GraphicsStateSnapshot::page_default()
+        );
+        Ok(())
+    }
+
+    #[test]
     fn invalid_record_range_returns_structured_error() -> Result<(), String> {
         let mut walker = GraphicsStateWalker::new();
         let record = OperatorRecord {
@@ -1353,6 +1534,40 @@ mod tests {
                 operand_index: 0,
             }
         );
+        Ok(())
+    }
+
+    #[test]
+    fn malformed_do_operand_count_returns_structured_error() -> Result<(), String> {
+        let Err(err) = walk(b"/Im1 /Im2 Do") else {
+            return Err("Do with two operands should fail".to_string());
+        };
+
+        assert_eq!(
+            err.kind,
+            GraphicsWalkErrorKind::MalformedOperandCount {
+                operator: b"Do".to_vec(),
+                expected: 1,
+                got: 2,
+            }
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn malformed_do_name_operand_returns_structured_error() -> Result<(), String> {
+        let Err(err) = walk(b"42 Do") else {
+            return Err("Do with non-name operand should fail".to_string());
+        };
+
+        assert_eq!(
+            err.kind,
+            GraphicsWalkErrorKind::MalformedNameOperand {
+                operator: b"Do".to_vec(),
+                operand_index: 0,
+            }
+        );
+        assert_eq!(err.range, ByteRange { start: 0, end: 2 });
         Ok(())
     }
 
@@ -1571,6 +1786,82 @@ mod tests {
         assert_eq!(first.entries[2].id.sequence, 2);
         assert_ne!(first.entries[0].id.digest, first.entries[1].id.digest);
         assert_ne!(first.entries[1].id.digest, first.entries[2].id.digest);
+        Ok(())
+    }
+
+    #[test]
+    fn image_inventory_includes_only_declared_image_xobject_names() -> Result<(), String> {
+        let inventory = image_inventory(
+            b"/Im1 Do /Fm1 Do /Im2 Do",
+            &ContentScope::Page,
+            &[
+                PdfName(b"Im2".to_vec()),
+                PdfName(b"Missing".to_vec()),
+                PdfName(b"Im1".to_vec()),
+            ],
+        )?;
+
+        assert_eq!(inventory.entries.len(), 2);
+        assert_eq!(inventory.entries[0].kind, ObjectKind::Image);
+        assert_eq!(inventory.entries[0].id.sequence, 0);
+        assert_eq!(
+            inventory.entries[0].provenance.range,
+            Some(ByteRange { start: 0, end: 7 })
+        );
+        assert_eq!(inventory.entries[1].id.sequence, 1);
+        assert_eq!(
+            inventory.entries[1].provenance.range,
+            Some(ByteRange { start: 16, end: 23 })
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn image_inventory_carries_conservative_observation_and_read_only_capability()
+    -> Result<(), String> {
+        let scope = ContentScope::AnnotationAppearance;
+        let inventory = image_inventory(b"q /Photo Do Q", &scope, &[PdfName(b"Photo".to_vec())])?;
+        let entry = inventory.entries.first().ok_or("missing image entry")?;
+
+        assert_eq!(entry.provenance.page, PageIndex(2));
+        assert_eq!(entry.provenance.scope, scope);
+        assert_eq!(
+            entry.provenance.range,
+            Some(ByteRange { start: 2, end: 11 })
+        );
+        assert_eq!(entry.bounds, None);
+        assert_eq!(entry.colors.len(), 1);
+        assert_eq!(entry.colors[0].usage, ColorUsage::Image);
+        assert_eq!(entry.colors[0].space, ColorSpace::Unknown);
+        assert!(entry.colors[0].components.is_empty());
+        assert_eq!(entry.colors[0].spot_name, None);
+        assert_eq!(entry.capabilities, vec![EditCapability::ReadOnly]);
+        Ok(())
+    }
+
+    #[test]
+    fn non_image_xobject_invocations_are_skipped_by_image_inventory() -> Result<(), String> {
+        let inventory = image_inventory(
+            b"/Form Do /PostScript Do",
+            &ContentScope::Page,
+            &[PdfName(b"Image".to_vec())],
+        )?;
+
+        assert!(inventory.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn image_inventory_object_ids_are_deterministic() -> Result<(), String> {
+        let names = [PdfName(b"Im1".to_vec()), PdfName(b"Im2".to_vec())];
+        let first = image_inventory(b"/Im1 Do /Other Do /Im2 Do", &ContentScope::Page, &names)?;
+        let second = image_inventory(b"/Im1 Do /Other Do /Im2 Do", &ContentScope::Page, &names)?;
+
+        assert_eq!(first, second);
+        assert_eq!(first.entries[0].id.page, PageIndex(2));
+        assert_eq!(first.entries[0].id.sequence, 0);
+        assert_eq!(first.entries[1].id.sequence, 1);
+        assert_ne!(first.entries[0].id.digest, first.entries[1].id.digest);
         Ok(())
     }
 }
