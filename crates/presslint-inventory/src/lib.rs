@@ -66,6 +66,25 @@ pub fn build_vector_inventory(
     Ok(vector_inventory_from_graphics_events(page, scope, &events))
 }
 
+/// Build text inventory entries from assembled content-stream operators.
+///
+/// This slice recognizes text-showing operators and records the active text
+/// rendering mode. It does not decode glyph strings or infer text geometry.
+///
+/// # Errors
+///
+/// Returns a structured graphics-state walker error for malformed records in
+/// the supported operator set or invalid source ranges.
+pub fn build_text_inventory(
+    source: &[u8],
+    records: &[OperatorRecord],
+    page: PageIndex,
+    scope: &ContentScope,
+) -> Result<Inventory, GraphicsWalkError> {
+    let events = walk_graphics_state(source, records)?;
+    Ok(text_inventory_from_graphics_events(page, scope, &events))
+}
+
 /// Build vector inventory entries from graphics-state events.
 ///
 /// Only path paint events that use stroke or fill color become inventory
@@ -113,6 +132,65 @@ pub fn vector_inventory_from_graphics_events(
     Inventory { entries }
 }
 
+/// Build text inventory entries from graphics-state events.
+///
+/// Text-showing events always become `ObjectKind::Text` entries. Supported
+/// visible rendering modes carry color observations and edit capabilities;
+/// invisible or unsupported modes remain conservative.
+#[must_use]
+pub fn text_inventory_from_graphics_events(
+    page: PageIndex,
+    scope: &ContentScope,
+    events: &[GraphicsStateEvent],
+) -> Inventory {
+    let mut entries = Vec::new();
+
+    for event in events {
+        let GraphicsStateEventKind::TextShow {
+            operator,
+            rendering_mode,
+        } = &event.kind
+        else {
+            continue;
+        };
+        let operator = *operator;
+        let rendering_mode = *rendering_mode;
+        let colors = text_color_observations(rendering_mode, &event.state);
+
+        let sequence = usize_to_u32(entries.len());
+        let provenance = Provenance {
+            page,
+            scope: scope.clone(),
+            range: Some(event.record_range),
+        };
+        let capabilities = text_capabilities(&colors);
+        let digest = text_object_digest(
+            page,
+            sequence,
+            scope,
+            event,
+            operator,
+            rendering_mode,
+            &colors,
+        );
+
+        entries.push(InventoryEntry {
+            id: ObjectId {
+                page,
+                sequence,
+                digest,
+            },
+            kind: ObjectKind::Text,
+            provenance,
+            bounds: None,
+            colors,
+            capabilities,
+        });
+    }
+
+    Inventory { entries }
+}
+
 /// Device colour currently held by one side of the graphics state.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GraphicsDeviceColor {
@@ -150,6 +228,8 @@ pub struct GraphicsStateSnapshot {
     pub stroking_color: GraphicsDeviceColor,
     /// Current nonstroking device colour.
     pub nonstroking_color: GraphicsDeviceColor,
+    /// Current text rendering mode.
+    pub text_rendering_mode: TextRenderingMode,
 }
 
 impl GraphicsStateSnapshot {
@@ -160,6 +240,7 @@ impl GraphicsStateSnapshot {
             ctm: IDENTITY_CTM,
             stroking_color: GraphicsDeviceColor::new(ColorSpace::DeviceGray, vec![0.0]),
             nonstroking_color: GraphicsDeviceColor::new(ColorSpace::DeviceGray, vec![0.0]),
+            text_rendering_mode: TextRenderingMode::Fill,
         }
     }
 
@@ -180,6 +261,71 @@ impl Default for GraphicsStateSnapshot {
     fn default() -> Self {
         Self::page_default()
     }
+}
+
+/// Text rendering mode relevant to first-slice text inventory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TextRenderingMode {
+    /// Fill glyph outlines with the nonstroking colour (`0 Tr`).
+    Fill,
+    /// Stroke glyph outlines with the stroking colour (`1 Tr`).
+    Stroke,
+    /// Fill and stroke glyph outlines (`2 Tr`).
+    FillThenStroke,
+    /// Neither fill nor stroke glyph outlines (`3 Tr`).
+    Invisible,
+    /// Rendering modes outside the first supported editable slice.
+    Unsupported {
+        /// Raw `Tr` mode value.
+        value: i32,
+    },
+}
+
+impl TextRenderingMode {
+    /// Map a PDF `Tr` integer into this inventory slice.
+    #[must_use]
+    pub const fn from_pdf_value(value: i32) -> Self {
+        match value {
+            0 => Self::Fill,
+            1 => Self::Stroke,
+            2 => Self::FillThenStroke,
+            3 => Self::Invisible,
+            _ => Self::Unsupported { value },
+        }
+    }
+
+    /// Whether this mode uses the stroking colour in the supported slice.
+    #[must_use]
+    pub const fn uses_stroke(self) -> bool {
+        matches!(self, Self::Stroke | Self::FillThenStroke)
+    }
+
+    /// Whether this mode uses the nonstroking colour in the supported slice.
+    #[must_use]
+    pub const fn uses_fill(self) -> bool {
+        matches!(self, Self::Fill | Self::FillThenStroke)
+    }
+
+    /// Whether this mode can be edited by first-slice text color actions.
+    #[must_use]
+    pub const fn has_supported_visible_paint(self) -> bool {
+        matches!(self, Self::Fill | Self::Stroke | Self::FillThenStroke)
+    }
+}
+
+/// Text-showing operator observed in a content stream.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TextShowOperator {
+    /// `Tj`.
+    ShowText,
+    /// `TJ`.
+    ShowTextAdjusted,
+    /// `'`.
+    MoveNextLineAndShowText,
+    /// `"`.
+    SetSpacingMoveNextLineAndShowText,
 }
 
 /// Type of path paint operation observed in a content stream.
@@ -266,6 +412,18 @@ pub enum GraphicsStateEventKind {
     PathPaint {
         /// Path paint operation.
         paint: PathPaintKind,
+    },
+    /// `Tr` changed the active text rendering mode.
+    SetTextRenderingMode {
+        /// Updated text rendering mode.
+        mode: TextRenderingMode,
+    },
+    /// A text-showing operator observed the current text state.
+    TextShow {
+        /// Text-showing operator.
+        operator: TextShowOperator,
+        /// Active text rendering mode for this text-showing operation.
+        rendering_mode: TextRenderingMode,
     },
     /// Operator outside this walker slice; state is unchanged.
     NoOp,
@@ -442,6 +600,7 @@ impl GraphicsStateWalker {
                 ColorSpace::DeviceCmyk,
                 4,
             ),
+            b"Tr" => self.set_text_rendering_mode(source, operator, record),
             b"S" => Self::path_paint(operator, record, PathPaintKind::Stroke),
             b"s" => Self::path_paint(operator, record, PathPaintKind::CloseAndStroke),
             b"f" => Self::path_paint(operator, record, PathPaintKind::FillNonzero),
@@ -452,6 +611,34 @@ impl GraphicsStateWalker {
             b"b" => Self::path_paint(operator, record, PathPaintKind::CloseFillAndStrokeNonzero),
             b"b*" => Self::path_paint(operator, record, PathPaintKind::CloseFillAndStrokeEvenOdd),
             b"n" => Self::path_paint(operator, record, PathPaintKind::EndPath),
+            b"Tj" => Self::text_show(
+                operator,
+                record,
+                TextShowOperator::ShowText,
+                1,
+                self.state.text_rendering_mode,
+            ),
+            b"TJ" => Self::text_show(
+                operator,
+                record,
+                TextShowOperator::ShowTextAdjusted,
+                1,
+                self.state.text_rendering_mode,
+            ),
+            b"'" => Self::text_show(
+                operator,
+                record,
+                TextShowOperator::MoveNextLineAndShowText,
+                1,
+                self.state.text_rendering_mode,
+            ),
+            b"\"" => Self::text_show(
+                operator,
+                record,
+                TextShowOperator::SetSpacingMoveNextLineAndShowText,
+                3,
+                self.state.text_rendering_mode,
+            ),
             _ => Ok(GraphicsStateEventKind::NoOp),
         }
     }
@@ -482,6 +669,18 @@ impl GraphicsStateWalker {
         Ok(GraphicsStateEventKind::SetNonstrokingDeviceColor { color })
     }
 
+    fn set_text_rendering_mode(
+        &mut self,
+        source: &[u8],
+        operator: &[u8],
+        record: &OperatorRecord,
+    ) -> Result<GraphicsStateEventKind, GraphicsWalkError> {
+        let value = integer_operand(source, operator, record)?;
+        let mode = TextRenderingMode::from_pdf_value(value);
+        self.state.text_rendering_mode = mode;
+        Ok(GraphicsStateEventKind::SetTextRenderingMode { mode })
+    }
+
     fn path_paint(
         operator: &[u8],
         record: &OperatorRecord,
@@ -489,6 +688,20 @@ impl GraphicsStateWalker {
     ) -> Result<GraphicsStateEventKind, GraphicsWalkError> {
         expect_operands(operator, record, 0)?;
         Ok(GraphicsStateEventKind::PathPaint { paint })
+    }
+
+    fn text_show(
+        operator: &[u8],
+        record: &OperatorRecord,
+        show_operator: TextShowOperator,
+        expected_operands: usize,
+        rendering_mode: TextRenderingMode,
+    ) -> Result<GraphicsStateEventKind, GraphicsWalkError> {
+        expect_operands(operator, record, expected_operands)?;
+        Ok(GraphicsStateEventKind::TextShow {
+            operator: show_operator,
+            rendering_mode,
+        })
     }
 }
 
@@ -532,6 +745,31 @@ fn color_observations(
     colors
 }
 
+fn text_color_observations(
+    mode: TextRenderingMode,
+    state: &GraphicsStateSnapshot,
+) -> Vec<ColorObservation> {
+    let mut colors = Vec::with_capacity(2);
+    if mode.uses_stroke() {
+        colors.push(state.stroke_observation());
+    }
+    if mode.uses_fill() {
+        colors.push(state.fill_observation());
+    }
+    colors
+}
+
+fn text_capabilities(colors: &[ColorObservation]) -> Vec<EditCapability> {
+    if colors.is_empty() {
+        Vec::new()
+    } else {
+        vec![
+            EditCapability::RewriteColorOperand,
+            EditCapability::AddTextSpreadStroke,
+        ]
+    }
+}
+
 fn vector_object_digest(
     page: PageIndex,
     sequence: u32,
@@ -549,6 +787,31 @@ fn vector_object_digest(
     digest.push_range(event.record_range);
     digest.push_range(event.operator_range);
     digest.push_u8(path_paint_tag(paint));
+    for color in colors {
+        digest.push_color_observation(color);
+    }
+    digest.finish()
+}
+
+fn text_object_digest(
+    page: PageIndex,
+    sequence: u32,
+    scope: &ContentScope,
+    event: &GraphicsStateEvent,
+    operator: TextShowOperator,
+    rendering_mode: TextRenderingMode,
+    colors: &[ColorObservation],
+) -> [u8; 32] {
+    let mut digest = StableDigest::new();
+    digest.push_bytes(b"presslint.text.v1");
+    digest.push_u32(page.0);
+    digest.push_u32(sequence);
+    digest.push_scope(scope);
+    digest.push_usize(event.index);
+    digest.push_range(event.record_range);
+    digest.push_range(event.operator_range);
+    digest.push_u8(text_show_operator_tag(operator));
+    digest.push_text_rendering_mode(rendering_mode);
     for color in colors {
         digest.push_color_observation(color);
     }
@@ -642,6 +905,25 @@ impl StableDigest {
         }
     }
 
+    fn push_text_rendering_mode(&mut self, mode: TextRenderingMode) {
+        match mode {
+            TextRenderingMode::Fill => self.push_u8(0),
+            TextRenderingMode::Stroke => self.push_u8(1),
+            TextRenderingMode::FillThenStroke => self.push_u8(2),
+            TextRenderingMode::Invisible => self.push_u8(3),
+            TextRenderingMode::Unsupported { value } => {
+                self.push_u8(4);
+                self.push_i32(value);
+            }
+        }
+    }
+
+    fn push_i32(&mut self, value: i32) {
+        for byte in value.to_le_bytes() {
+            self.push_u8(byte);
+        }
+    }
+
     fn finish(self) -> [u8; 32] {
         let mut out = [0; 32];
         for (chunk, lane) in out.chunks_exact_mut(8).zip(self.lanes) {
@@ -671,6 +953,15 @@ const fn path_paint_tag(paint: PathPaintKind) -> u8 {
         PathPaintKind::CloseFillAndStrokeNonzero => 7,
         PathPaintKind::CloseFillAndStrokeEvenOdd => 8,
         PathPaintKind::EndPath => 9,
+    }
+}
+
+const fn text_show_operator_tag(operator: TextShowOperator) -> u8 {
+    match operator {
+        TextShowOperator::ShowText => 0,
+        TextShowOperator::ShowTextAdjusted => 1,
+        TextShowOperator::MoveNextLineAndShowText => 2,
+        TextShowOperator::SetSpacingMoveNextLineAndShowText => 3,
     }
 }
 
@@ -763,6 +1054,26 @@ fn numeric_operands(
     ])
 }
 
+fn integer_operand(
+    source: &[u8],
+    operator: &[u8],
+    record: &OperatorRecord,
+) -> Result<i32, GraphicsWalkError> {
+    let operands = numeric_operands_vec(source, operator, record, 1)?;
+    let value = operands[0];
+    if value.fract() != 0.0 || value < f64::from(i32::MIN) || value > f64::from(i32::MAX) {
+        return Err(GraphicsWalkError::new(
+            GraphicsWalkErrorKind::MalformedNumericOperand {
+                operator: operator.to_vec(),
+                operand_index: 0,
+            },
+            record.operands[0].range,
+        ));
+    }
+    #[allow(clippy::cast_possible_truncation)]
+    Ok(value as i32)
+}
+
 fn numeric_operands_vec(
     source: &[u8],
     operator: &[u8],
@@ -841,7 +1152,8 @@ mod tests {
 
     use super::{
         GraphicsStateEventKind, GraphicsStateWalker, GraphicsWalkError, GraphicsWalkErrorKind,
-        Inventory, PathPaintKind, build_vector_inventory, walk_graphics_state,
+        Inventory, PathPaintKind, TextRenderingMode, TextShowOperator, build_text_inventory,
+        build_vector_inventory, walk_graphics_state,
     };
 
     fn walk(input: &[u8]) -> Result<Vec<super::GraphicsStateEvent>, GraphicsWalkError> {
@@ -870,6 +1182,13 @@ mod tests {
         let tokens = tokenize(input).map_err(|error| format!("{error:?}"))?;
         let assembled = assemble_operators(&tokens).map_err(|error| format!("{error:?}"))?;
         build_vector_inventory(input, &assembled.records, PageIndex(2), scope)
+            .map_err(|error| format!("{error:?}"))
+    }
+
+    fn text_inventory(input: &[u8], scope: &ContentScope) -> Result<Inventory, String> {
+        let tokens = tokenize(input).map_err(|error| format!("{error:?}"))?;
+        let assembled = assemble_operators(&tokens).map_err(|error| format!("{error:?}"))?;
+        build_text_inventory(input, &assembled.records, PageIndex(2), scope)
             .map_err(|error| format!("{error:?}"))
     }
 
@@ -1114,6 +1433,144 @@ mod tests {
         let inventory = vector_inventory(b"10 20 m n", &ContentScope::Page)?;
 
         assert!(inventory.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn default_filled_text_inventory_uses_nonstroking_color() -> Result<(), String> {
+        let scope = ContentScope::FormXObject {
+            name: PdfName(b"Body".to_vec()),
+        };
+        let inventory = text_inventory(b"0.2 0.3 0.4 rg (Hello) Tj", &scope)?;
+        let entry = inventory.entries.first().ok_or("missing text entry")?;
+
+        assert_eq!(inventory.entries.len(), 1);
+        assert_eq!(entry.kind, ObjectKind::Text);
+        assert_eq!(entry.provenance.page, PageIndex(2));
+        assert_eq!(entry.provenance.scope, scope);
+        assert_eq!(
+            entry.provenance.range,
+            Some(ByteRange { start: 15, end: 25 })
+        );
+        assert_eq!(entry.bounds, None);
+        assert_eq!(entry.colors.len(), 1);
+        assert_eq!(entry.colors[0].usage, ColorUsage::Fill);
+        assert_eq!(entry.colors[0].space, ColorSpace::DeviceRgb);
+        assert_eq!(entry.colors[0].components, vec![0.2, 0.3, 0.4]);
+        assert_eq!(
+            entry.capabilities,
+            vec![
+                EditCapability::RewriteColorOperand,
+                EditCapability::AddTextSpreadStroke,
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn stroked_text_rendering_mode_uses_stroking_color() -> Result<(), String> {
+        let inventory = text_inventory(b"0.7 G 1 Tr (Outline) Tj", &ContentScope::Page)?;
+        let entry = inventory.entries.first().ok_or("missing text entry")?;
+
+        assert_eq!(entry.colors.len(), 1);
+        assert_eq!(entry.colors[0].usage, ColorUsage::Stroke);
+        assert_eq!(entry.colors[0].space, ColorSpace::DeviceGray);
+        assert_eq!(entry.colors[0].components, vec![0.7]);
+        assert_eq!(
+            entry.capabilities,
+            vec![
+                EditCapability::RewriteColorOperand,
+                EditCapability::AddTextSpreadStroke,
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn fill_and_stroke_text_rendering_mode_uses_both_colors() -> Result<(), String> {
+        let inventory = text_inventory(
+            b"0.1 0.2 0.3 RG 0.4 0.5 0.6 rg 2 Tr [(Hi) 20 (There)] TJ",
+            &ContentScope::Page,
+        )?;
+        let entry = inventory.entries.first().ok_or("missing text entry")?;
+
+        assert_eq!(entry.colors.len(), 2);
+        assert_eq!(entry.colors[0].usage, ColorUsage::Stroke);
+        assert_eq!(entry.colors[0].space, ColorSpace::DeviceRgb);
+        assert_eq!(entry.colors[0].components, vec![0.1, 0.2, 0.3]);
+        assert_eq!(entry.colors[1].usage, ColorUsage::Fill);
+        assert_eq!(entry.colors[1].space, ColorSpace::DeviceRgb);
+        assert_eq!(entry.colors[1].components, vec![0.4, 0.5, 0.6]);
+        Ok(())
+    }
+
+    #[test]
+    fn invisible_text_is_represented_without_color_edit_capability() -> Result<(), String> {
+        let inventory = text_inventory(b"3 Tr (Hidden) Tj", &ContentScope::Page)?;
+        let entry = inventory.entries.first().ok_or("missing text entry")?;
+
+        assert_eq!(entry.kind, ObjectKind::Text);
+        assert!(entry.colors.is_empty());
+        assert!(entry.capabilities.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn unsupported_text_rendering_mode_is_conservative() -> Result<(), String> {
+        let events = walk(b"4 Tr (ClipFill) Tj").map_err(|error| format!("{error:?}"))?;
+        assert_eq!(
+            events[0].kind,
+            GraphicsStateEventKind::SetTextRenderingMode {
+                mode: TextRenderingMode::Unsupported { value: 4 },
+            }
+        );
+        assert_eq!(
+            events[1].kind,
+            GraphicsStateEventKind::TextShow {
+                operator: TextShowOperator::ShowText,
+                rendering_mode: TextRenderingMode::Unsupported { value: 4 },
+            }
+        );
+
+        let inventory = text_inventory(b"4 Tr (ClipFill) Tj", &ContentScope::Page)?;
+        let entry = inventory.entries.first().ok_or("missing text entry")?;
+
+        assert_eq!(entry.kind, ObjectKind::Text);
+        assert!(entry.colors.is_empty());
+        assert!(entry.capabilities.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn quoted_text_showing_operators_are_inventoried() -> Result<(), String> {
+        let inventory = text_inventory(b"(Next) ' 4 2 (Spaced) \"", &ContentScope::Page)?;
+
+        assert_eq!(inventory.entries.len(), 2);
+        assert_eq!(inventory.entries[0].id.sequence, 0);
+        assert_eq!(
+            inventory.entries[0].provenance.range,
+            Some(ByteRange { start: 0, end: 8 })
+        );
+        assert_eq!(inventory.entries[1].id.sequence, 1);
+        assert_eq!(
+            inventory.entries[1].provenance.range,
+            Some(ByteRange { start: 9, end: 23 })
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn text_inventory_object_ids_are_deterministic() -> Result<(), String> {
+        let first = text_inventory(b"(A) Tj 1 Tr (B) Tj 2 Tr [(C)] TJ", &ContentScope::Page)?;
+        let second = text_inventory(b"(A) Tj 1 Tr (B) Tj 2 Tr [(C)] TJ", &ContentScope::Page)?;
+
+        assert_eq!(first, second);
+        assert_eq!(first.entries[0].id.page, PageIndex(2));
+        assert_eq!(first.entries[0].id.sequence, 0);
+        assert_eq!(first.entries[1].id.sequence, 1);
+        assert_eq!(first.entries[2].id.sequence, 2);
+        assert_ne!(first.entries[0].id.digest, first.entries[1].id.digest);
+        assert_ne!(first.entries[1].id.digest, first.entries[2].id.digest);
         Ok(())
     }
 }
