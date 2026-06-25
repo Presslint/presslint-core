@@ -7,6 +7,7 @@ name = "presslint-actions"
 version = "0.0.1"
 dependencies = [
  "presslint-core",
+ "presslint-inventory",
  "presslint-selectors",
  "serde",
 ]

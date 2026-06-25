@@ -1,9 +1,10 @@
-//! Serializable actions, recipes, and patch-plan identifiers.
+//! Serializable actions, recipes, and no-op patch planning.
 
 #![forbid(unsafe_code)]
 
-use presslint_core::ObjectId;
-use presslint_selectors::Selector;
+use presslint_core::{EditCapability, ObjectId};
+use presslint_inventory::Inventory;
+use presslint_selectors::{Selector, matches as selector_matches};
 use serde::{Deserialize, Serialize};
 
 /// Versioned recipe document.
@@ -36,6 +37,18 @@ pub enum Action {
     MinimumStrokeWidth(MinimumStrokeWidth),
 }
 
+impl Action {
+    /// Return the inventory edit capability required to plan this action.
+    #[must_use]
+    pub const fn required_capability(&self) -> EditCapability {
+        match self {
+            Self::ConvertColor(_) => EditCapability::RewriteColorOperand,
+            Self::SpreadText(_) => EditCapability::AddTextSpreadStroke,
+            Self::MinimumStrokeWidth(_) => EditCapability::AdjustStrokeWidth,
+        }
+    }
+}
+
 /// Color-conversion action payload.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConvertColor {
@@ -59,11 +72,251 @@ pub struct MinimumStrokeWidth {
     pub width_pt: f64,
 }
 
-/// Planned action against selected objects.
+/// Explicit patch-plan mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PatchPlanMode {
+    /// Planning report only; no PDF bytes are written or mutated.
+    NoOp,
+}
+
+/// Deterministic no-op patch plan for a recipe.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PatchPlan {
+    /// Explicitly records that this plan is report-only.
+    pub mode: PatchPlanMode,
+    /// Planned recipe steps in recipe order.
+    pub steps: Vec<ActionPlan>,
+}
+
+impl PatchPlan {
+    /// Return true when the plan is explicitly report-only.
+    #[must_use]
+    pub const fn is_no_op(&self) -> bool {
+        matches!(self.mode, PatchPlanMode::NoOp)
+    }
+}
+
+/// Planned action report for one recipe step.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ActionPlan {
-    /// Objects selected for the action.
-    pub targets: Vec<ObjectId>,
     /// Requested action.
     pub action: Action,
+    /// Objects selected for the action in inventory order.
+    pub targets: Vec<ObjectId>,
+    /// Objects matched by the selector but skipped before future mutation.
+    pub skipped: Vec<SkippedTarget>,
+}
+
+/// Matched inventory entry skipped during planning.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SkippedTarget {
+    /// Matched object that cannot currently receive the requested action.
+    pub object: ObjectId,
+    /// Structured reason for the skip.
+    pub reason: SkipReason,
+}
+
+/// Structured reason a matched object was omitted from action targets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "reason", rename_all = "snake_case")]
+pub enum SkipReason {
+    /// The inventory entry does not advertise the action's required capability.
+    UnsupportedCapability {
+        /// Required edit capability for the requested action.
+        required: EditCapability,
+    },
+}
+
+/// Evaluate a recipe against an inventory and return a deterministic no-op plan.
+///
+/// Selectors are evaluated against entries in inventory order. Matching entries
+/// that advertise the action's required edit capability become targets; matching
+/// entries without that capability are reported as structured skips.
+#[must_use]
+pub fn plan_recipe(recipe: &Recipe, inventory: &Inventory) -> PatchPlan {
+    let steps = recipe
+        .steps
+        .iter()
+        .map(|step| plan_step(step, inventory))
+        .collect();
+
+    PatchPlan {
+        mode: PatchPlanMode::NoOp,
+        steps,
+    }
+}
+
+fn plan_step(step: &RecipeStep, inventory: &Inventory) -> ActionPlan {
+    let required = step.action.required_capability();
+    let mut targets = Vec::new();
+    let mut skipped = Vec::new();
+
+    for entry in &inventory.entries {
+        if !selector_matches(&step.select, entry) {
+            continue;
+        }
+
+        if entry.capabilities.contains(&required) {
+            targets.push(entry.id.clone());
+        } else {
+            skipped.push(SkippedTarget {
+                object: entry.id.clone(),
+                reason: SkipReason::UnsupportedCapability { required },
+            });
+        }
+    }
+
+    ActionPlan {
+        action: step.action.clone(),
+        targets,
+        skipped,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use presslint_core::{
+        ContentScope, EditCapability, ObjectId, ObjectKind, PageIndex, Provenance,
+    };
+    use presslint_inventory::{Inventory, InventoryEntry};
+    use presslint_selectors::{Predicate, Selector};
+
+    use super::{
+        Action, ConvertColor, MinimumStrokeWidth, PatchPlanMode, Recipe, RecipeStep, SkipReason,
+        SpreadText, plan_recipe,
+    };
+
+    fn object_id(sequence: u32) -> ObjectId {
+        let mut digest = [0; 32];
+        digest[0] = u8::try_from(sequence).unwrap_or(u8::MAX);
+
+        ObjectId {
+            page: PageIndex(0),
+            sequence,
+            digest,
+        }
+    }
+
+    fn entry(
+        sequence: u32,
+        kind: ObjectKind,
+        capabilities: impl IntoIterator<Item = EditCapability>,
+    ) -> InventoryEntry {
+        InventoryEntry {
+            id: object_id(sequence),
+            kind,
+            provenance: Provenance {
+                page: PageIndex(0),
+                scope: ContentScope::Page,
+                range: None,
+            },
+            bounds: None,
+            colors: Vec::new(),
+            capabilities: capabilities.into_iter().collect(),
+        }
+    }
+
+    fn recipe_step(select: Selector, action: Action) -> RecipeStep {
+        RecipeStep { select, action }
+    }
+
+    #[test]
+    fn plan_recipe_preserves_selector_matches_in_inventory_order() {
+        let inventory = Inventory {
+            entries: vec![
+                entry(2, ObjectKind::Vector, [EditCapability::RewriteColorOperand]),
+                entry(1, ObjectKind::Text, [EditCapability::AddTextSpreadStroke]),
+                entry(3, ObjectKind::Vector, [EditCapability::RewriteColorOperand]),
+            ],
+        };
+        let recipe = Recipe {
+            schema_version: 1,
+            steps: vec![recipe_step(
+                Selector::Predicate {
+                    predicate: Predicate::ObjectKind {
+                        object_kind: ObjectKind::Vector,
+                    },
+                },
+                Action::ConvertColor(ConvertColor {
+                    target: "pso-coated-v3".to_owned(),
+                }),
+            )],
+        };
+
+        let plan = plan_recipe(&recipe, &inventory);
+
+        assert_eq!(plan.mode, PatchPlanMode::NoOp);
+        assert!(plan.is_no_op());
+        assert_eq!(plan.steps.len(), 1);
+        assert_eq!(plan.steps[0].targets, vec![object_id(2), object_id(3)]);
+        assert!(plan.steps[0].skipped.is_empty());
+    }
+
+    #[test]
+    fn plan_recipe_reports_empty_matches_without_skips() {
+        let inventory = Inventory {
+            entries: vec![entry(
+                1,
+                ObjectKind::Vector,
+                [EditCapability::RewriteColorOperand],
+            )],
+        };
+        let recipe = Recipe {
+            schema_version: 1,
+            steps: vec![recipe_step(
+                Selector::None,
+                Action::MinimumStrokeWidth(MinimumStrokeWidth { width_pt: 0.25 }),
+            )],
+        };
+
+        let plan = plan_recipe(&recipe, &inventory);
+
+        assert_eq!(plan.mode, PatchPlanMode::NoOp);
+        assert!(plan.steps[0].targets.is_empty());
+        assert!(plan.steps[0].skipped.is_empty());
+    }
+
+    #[test]
+    fn plan_recipe_reports_unsupported_capability_skips_in_inventory_order() {
+        let inventory = Inventory {
+            entries: vec![
+                entry(1, ObjectKind::Text, [EditCapability::ReadOnly]),
+                entry(2, ObjectKind::Text, [EditCapability::AddTextSpreadStroke]),
+                entry(3, ObjectKind::Text, [EditCapability::RewriteColorOperand]),
+            ],
+        };
+        let recipe = Recipe {
+            schema_version: 1,
+            steps: vec![recipe_step(
+                Selector::All,
+                Action::SpreadText(SpreadText {
+                    amount_pt: 0.1,
+                    overprint: true,
+                }),
+            )],
+        };
+
+        let plan = plan_recipe(&recipe, &inventory);
+        let step = &plan.steps[0];
+
+        assert_eq!(step.targets, vec![object_id(2)]);
+        assert_eq!(
+            step.skipped,
+            vec![
+                super::SkippedTarget {
+                    object: object_id(1),
+                    reason: SkipReason::UnsupportedCapability {
+                        required: EditCapability::AddTextSpreadStroke,
+                    },
+                },
+                super::SkippedTarget {
+                    object: object_id(3),
+                    reason: SkipReason::UnsupportedCapability {
+                        required: EditCapability::AddTextSpreadStroke,
+                    },
+                },
+            ]
+        );
+    }
 }
