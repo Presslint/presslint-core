@@ -146,6 +146,41 @@ pub fn build_form_inventory(
     ))
 }
 
+/// Build a combined page-object inventory from assembled content-stream
+/// operators.
+///
+/// This is the consolidation of the four per-kind slices: it walks the
+/// graphics-state events exactly once and merges vector, text, image, and form
+/// entries into a single `Inventory` in content (event) order, assigning one
+/// monotonic `sequence` shared across all kinds.
+///
+/// `image_xobject_names` and `form_xobject_names` must be disjoint by contract.
+/// If a `Do` name appears in both lists, the image classification wins.
+///
+/// See [`inventory_from_graphics_events`] for the per-event classification rules.
+///
+/// # Errors
+///
+/// Returns a structured graphics-state walker error for malformed records in
+/// the supported operator set or invalid source ranges.
+pub fn build_inventory(
+    source: &[u8],
+    records: &[OperatorRecord],
+    page: PageIndex,
+    scope: &ContentScope,
+    image_xobject_names: &[PdfName],
+    form_xobject_names: &[PdfName],
+) -> Result<Inventory, GraphicsWalkError> {
+    let events = walk_graphics_state(source, records)?;
+    Ok(inventory_from_graphics_events(
+        page,
+        scope,
+        &events,
+        image_xobject_names,
+        form_xobject_names,
+    ))
+}
+
 /// Build vector inventory entries from graphics-state events.
 ///
 /// Only path paint events that use stroke or fill color become inventory
@@ -156,41 +191,9 @@ pub fn vector_inventory_from_graphics_events(
     scope: &ContentScope,
     events: &[GraphicsStateEvent],
 ) -> Inventory {
-    let mut entries = Vec::new();
-
-    for event in events {
-        let GraphicsStateEventKind::PathPaint { paint } = &event.kind else {
-            continue;
-        };
-        let paint = *paint;
-        let colors = color_observations(paint, &event.state);
-        if colors.is_empty() {
-            continue;
-        }
-
-        let sequence = usize_to_u32(entries.len());
-        let provenance = Provenance {
-            page,
-            scope: scope.clone(),
-            range: Some(event.record_range),
-        };
-        let digest = vector_object_digest(page, sequence, scope, event, paint, &colors);
-
-        entries.push(InventoryEntry {
-            id: ObjectId {
-                page,
-                sequence,
-                digest,
-            },
-            kind: ObjectKind::Vector,
-            provenance,
-            bounds: None,
-            colors,
-            capabilities: vec![EditCapability::RewriteColorOperand],
-        });
-    }
-
-    Inventory { entries }
+    collect_entries(events, |event, sequence| {
+        vector_entry(page, scope, event, sequence)
+    })
 }
 
 /// Build text inventory entries from graphics-state events.
@@ -204,52 +207,9 @@ pub fn text_inventory_from_graphics_events(
     scope: &ContentScope,
     events: &[GraphicsStateEvent],
 ) -> Inventory {
-    let mut entries = Vec::new();
-
-    for event in events {
-        let GraphicsStateEventKind::TextShow {
-            operator,
-            rendering_mode,
-        } = &event.kind
-        else {
-            continue;
-        };
-        let operator = *operator;
-        let rendering_mode = *rendering_mode;
-        let colors = text_color_observations(rendering_mode, &event.state);
-
-        let sequence = usize_to_u32(entries.len());
-        let provenance = Provenance {
-            page,
-            scope: scope.clone(),
-            range: Some(event.record_range),
-        };
-        let capabilities = text_capabilities(&colors);
-        let digest = text_object_digest(
-            page,
-            sequence,
-            scope,
-            event,
-            operator,
-            rendering_mode,
-            &colors,
-        );
-
-        entries.push(InventoryEntry {
-            id: ObjectId {
-                page,
-                sequence,
-                digest,
-            },
-            kind: ObjectKind::Text,
-            provenance,
-            bounds: None,
-            colors,
-            capabilities,
-        });
-    }
-
-    Inventory { entries }
+    collect_entries(events, |event, sequence| {
+        text_entry(page, scope, event, sequence)
+    })
 }
 
 /// Build image inventory entries from graphics-state events.
@@ -264,18 +224,9 @@ pub fn image_inventory_from_graphics_events(
     events: &[GraphicsStateEvent],
     image_xobject_names: &[PdfName],
 ) -> Inventory {
-    xobject_inventory_from_graphics_events(
-        page,
-        scope,
-        events,
-        image_xobject_names,
-        |sequence, event, name| {
-            let colors = vec![image_color_observation()];
-            let digest = image_object_digest(page, sequence, scope, event, name, &colors);
-
-            (ObjectKind::Image, colors, digest)
-        },
-    )
+    collect_entries(events, |event, sequence| {
+        image_entry(page, scope, event, image_xobject_names, sequence)
+    })
 }
 
 /// Build form `XObject` invocation inventory entries from graphics-state events.
@@ -290,62 +241,213 @@ pub fn form_inventory_from_graphics_events(
     events: &[GraphicsStateEvent],
     form_xobject_names: &[PdfName],
 ) -> Inventory {
-    xobject_inventory_from_graphics_events(
-        page,
-        scope,
-        events,
-        form_xobject_names,
-        |sequence, event, name| {
-            let digest = form_object_digest(page, sequence, scope, event, name);
-
-            (ObjectKind::FormXObject, Vec::new(), digest)
-        },
-    )
+    collect_entries(events, |event, sequence| {
+        form_entry(page, scope, event, form_xobject_names, sequence)
+    })
 }
 
-fn xobject_inventory_from_graphics_events(
+/// Build a combined page-object inventory from graphics-state events.
+///
+/// This walks the events once and merges the vector, text, image, and form
+/// slices into a single `Inventory` in content (event) order. Each emitted
+/// entry receives one monotonic `sequence` from a counter shared across all
+/// kinds, so the inventory is a single content-ordered identity space.
+///
+/// For each event the same kind the matching per-kind builder would emit is
+/// produced:
+///
+/// - `PathPaint` that uses color -> vector (path paint with no color is skipped);
+/// - `TextShow` -> text;
+/// - `XObjectInvoke` whose name is in `image_xobject_names` -> image;
+/// - `XObjectInvoke` whose name is in `form_xobject_names` -> form;
+/// - any other `XObjectInvoke` and all no-op/path-ending events -> skipped.
+///
+/// `image_xobject_names` and `form_xobject_names` must be disjoint by contract.
+/// If a `Do` name appears in both lists, the image classification wins.
+///
+/// Each merged entry's kind, provenance, colors, and capabilities equal what the
+/// matching per-kind builder would produce for the same event; only the
+/// `sequence` (and therefore the digest) differs, because the counter is global.
+#[must_use]
+pub fn inventory_from_graphics_events(
     page: PageIndex,
     scope: &ContentScope,
     events: &[GraphicsStateEvent],
-    xobject_names: &[PdfName],
-    mut entry_parts: impl FnMut(
-        u32,
-        &GraphicsStateEvent,
-        &PdfName,
-    ) -> (ObjectKind, Vec<ColorObservation>, [u8; 32]),
+    image_xobject_names: &[PdfName],
+    form_xobject_names: &[PdfName],
 ) -> Inventory {
-    let entries = events
-        .iter()
-        .filter_map(|event| {
-            let GraphicsStateEventKind::XObjectInvoke { name } = &event.kind else {
-                return None;
-            };
-            xobject_names.contains(name).then_some((event, name))
-        })
-        .enumerate()
-        .map(|(sequence, (event, name))| {
-            let sequence = usize_to_u32(sequence);
-            let (kind, colors, digest) = entry_parts(sequence, event, name);
-            InventoryEntry {
-                id: ObjectId {
-                    page,
-                    sequence,
-                    digest,
-                },
-                kind,
-                provenance: Provenance {
-                    page,
-                    scope: scope.clone(),
-                    range: Some(event.record_range),
-                },
-                bounds: None,
-                colors,
-                capabilities: vec![EditCapability::ReadOnly],
-            }
-        })
-        .collect();
+    collect_entries(events, |event, sequence| {
+        // Dispatch in fixed order; the helpers are mutually exclusive by event
+        // kind except for `XObjectInvoke`, where image is tried before form so
+        // a name present in both lists is classified as an image.
+        vector_entry(page, scope, event, sequence)
+            .or_else(|| text_entry(page, scope, event, sequence))
+            .or_else(|| image_entry(page, scope, event, image_xobject_names, sequence))
+            .or_else(|| form_entry(page, scope, event, form_xobject_names, sequence))
+    })
+}
 
+/// Walk events once, assigning a shared monotonic content-order `sequence` to
+/// each emitted entry. `classify` returns `None` for events that emit nothing,
+/// which leaves the counter unchanged.
+fn collect_entries(
+    events: &[GraphicsStateEvent],
+    mut classify: impl FnMut(&GraphicsStateEvent, u32) -> Option<InventoryEntry>,
+) -> Inventory {
+    let mut entries = Vec::new();
+    for event in events {
+        let sequence = usize_to_u32(entries.len());
+        if let Some(entry) = classify(event, sequence) {
+            entries.push(entry);
+        }
+    }
     Inventory { entries }
+}
+
+fn vector_entry(
+    page: PageIndex,
+    scope: &ContentScope,
+    event: &GraphicsStateEvent,
+    sequence: u32,
+) -> Option<InventoryEntry> {
+    let GraphicsStateEventKind::PathPaint { paint } = &event.kind else {
+        return None;
+    };
+    let paint = *paint;
+    let colors = color_observations(paint, &event.state);
+    if colors.is_empty() {
+        return None;
+    }
+    let digest = vector_object_digest(page, sequence, scope, event, paint, &colors);
+    Some(inventory_entry(
+        page,
+        scope,
+        event,
+        sequence,
+        ObjectKind::Vector,
+        colors,
+        vec![EditCapability::RewriteColorOperand],
+        digest,
+    ))
+}
+
+fn text_entry(
+    page: PageIndex,
+    scope: &ContentScope,
+    event: &GraphicsStateEvent,
+    sequence: u32,
+) -> Option<InventoryEntry> {
+    let GraphicsStateEventKind::TextShow {
+        operator,
+        rendering_mode,
+    } = &event.kind
+    else {
+        return None;
+    };
+    let operator = *operator;
+    let rendering_mode = *rendering_mode;
+    let colors = text_color_observations(rendering_mode, &event.state);
+    let capabilities = text_capabilities(&colors);
+    let digest = text_object_digest(
+        page,
+        sequence,
+        scope,
+        event,
+        operator,
+        rendering_mode,
+        &colors,
+    );
+    Some(inventory_entry(
+        page,
+        scope,
+        event,
+        sequence,
+        ObjectKind::Text,
+        colors,
+        capabilities,
+        digest,
+    ))
+}
+
+/// Return the invoked `XObject` name when `event` is a `Do` for a name the
+/// caller declared in `names`; otherwise `None`.
+fn matched_xobject<'a>(event: &'a GraphicsStateEvent, names: &[PdfName]) -> Option<&'a PdfName> {
+    let GraphicsStateEventKind::XObjectInvoke { name } = &event.kind else {
+        return None;
+    };
+    names.contains(name).then_some(name)
+}
+
+fn image_entry(
+    page: PageIndex,
+    scope: &ContentScope,
+    event: &GraphicsStateEvent,
+    image_xobject_names: &[PdfName],
+    sequence: u32,
+) -> Option<InventoryEntry> {
+    let name = matched_xobject(event, image_xobject_names)?;
+    let colors = vec![image_color_observation()];
+    let digest = image_object_digest(page, sequence, scope, event, name, &colors);
+    Some(inventory_entry(
+        page,
+        scope,
+        event,
+        sequence,
+        ObjectKind::Image,
+        colors,
+        vec![EditCapability::ReadOnly],
+        digest,
+    ))
+}
+
+fn form_entry(
+    page: PageIndex,
+    scope: &ContentScope,
+    event: &GraphicsStateEvent,
+    form_xobject_names: &[PdfName],
+    sequence: u32,
+) -> Option<InventoryEntry> {
+    let name = matched_xobject(event, form_xobject_names)?;
+    let digest = form_object_digest(page, sequence, scope, event, name);
+    Some(inventory_entry(
+        page,
+        scope,
+        event,
+        sequence,
+        ObjectKind::FormXObject,
+        Vec::new(),
+        vec![EditCapability::ReadOnly],
+        digest,
+    ))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn inventory_entry(
+    page: PageIndex,
+    scope: &ContentScope,
+    event: &GraphicsStateEvent,
+    sequence: u32,
+    kind: ObjectKind,
+    colors: Vec<ColorObservation>,
+    capabilities: Vec<EditCapability>,
+    digest: [u8; 32],
+) -> InventoryEntry {
+    InventoryEntry {
+        id: ObjectId {
+            page,
+            sequence,
+            digest,
+        },
+        kind,
+        provenance: Provenance {
+            page,
+            scope: scope.clone(),
+            range: Some(event.record_range),
+        },
+        bounds: None,
+        colors,
+        capabilities,
+    }
 }
 
 fn color_observations(

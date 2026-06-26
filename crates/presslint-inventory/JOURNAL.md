@@ -48,6 +48,23 @@
   resource names, carry caller-provided page/content scope and `Do` provenance,
   leave bounds unset, synthesize no color observations, use a dedicated
   `presslint.form.v1` digest tag, and advertise only read-only capability.
+- Adds a combined page-object inventory builder pair (`build_inventory` plus
+  `inventory_from_graphics_events`) that walks the graphics-state events exactly
+  once and merges the vector, text, image, and form slices into a single
+  `Inventory` in content (event) order. One monotonic `sequence` counter is
+  shared across all kinds, so the merged inventory is a single content-ordered
+  identity space rather than four disjoint per-kind ones. Each merged entry's
+  kind, provenance, colors, and capabilities equal what the matching per-kind
+  builder would produce for the same event; only the global `sequence` (and
+  therefore the digest) differs. `XObjectInvoke` names are classified image
+  first, then form, so a name present in both the image and form lists (which
+  are disjoint by contract) is classified as an image. The per-kind builders now
+  share a single `collect_entries` walk plus per-event entry helpers, so the
+  combined and per-kind paths construct entries from the same code and the
+  existing per-kind builders keep identical signatures, behavior, and digests.
+  The image and form entry helpers share a single `matched_xobject` lookup for
+  the `Do`-name classification instead of duplicating the `XObjectInvoke` match
+  and name-list check, with no change to the resolved name or any digest.
 
 ## Follow-Ups
 
