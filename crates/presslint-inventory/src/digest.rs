@@ -75,6 +75,25 @@ pub fn image_object_digest(
     digest.finish()
 }
 
+pub fn form_object_digest(
+    page: PageIndex,
+    sequence: u32,
+    scope: &ContentScope,
+    event: &GraphicsStateEvent,
+    name: &PdfName,
+) -> [u8; 32] {
+    let mut digest = StableDigest::new();
+    digest.push_bytes(b"presslint.form.v1");
+    digest.push_u32(page.0);
+    digest.push_u32(sequence);
+    digest.push_scope(scope);
+    digest.push_usize(event.index);
+    digest.push_range(event.record_range);
+    digest.push_range(event.operator_range);
+    digest.push_bytes(&name.0);
+    digest.finish()
+}
+
 #[derive(Debug, Clone)]
 struct StableDigest {
     lanes: [u64; 4],

@@ -43,13 +43,21 @@
   names, carry caller-provided page/content scope and `Do` provenance, leave
   bounds unset, record an unknown image color observation, and advertise only
   read-only capability.
+- Builds the first form XObject invocation inventory slice from the same `Do`
+  events. Form entries are emitted only for caller-declared form XObject
+  resource names, carry caller-provided page/content scope and `Do` provenance,
+  leave bounds unset, synthesize no color observations, use a dedicated
+  `presslint.form.v1` digest tag, and advertise only read-only capability.
 
 ## Follow-Ups
 
-- Do not create form/shading inventory before the text, vector, and image
+- Do not create shading inventory before the text, vector, image, and form
   slices are stable.
 - Add geometry/bounds only after path construction interpretation is designed.
 - Add glyph decoding, font resource lookup, CMaps, shaping, and text geometry
   only after the text inventory provenance model is stable.
 - Add page resource traversal, image stream inspection, image bounds, and image
   replacement only after the invocation-level image inventory model is stable.
+- Add form stream recursion, page resource traversal, shared-object ownership
+  analysis, and form geometry only after the invocation-level form inventory
+  model is stable.
