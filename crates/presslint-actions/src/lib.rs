@@ -2,8 +2,8 @@
 
 #![forbid(unsafe_code)]
 
-use presslint_core::{EditCapability, ObjectId};
-use presslint_inventory::Inventory;
+use presslint_core::{ColorSpace, EditCapability, ObjectId};
+use presslint_inventory::{Inventory, InventoryEntry};
 use presslint_selectors::{Selector, matches as selector_matches};
 use serde::{Deserialize, Serialize};
 
@@ -126,13 +126,52 @@ pub enum SkipReason {
         /// Required edit capability for the requested action.
         required: EditCapability,
     },
+    /// The matched `ConvertColor` entry advertises the rewrite capability but
+    /// carries no process device color observation (`DeviceGray` /
+    /// `DeviceRGB` / `DeviceCMYK`) that the no-op planner can target.
+    NonProcessColor,
+}
+
+/// Return true when `space` is one of the three process device color spaces the
+/// no-op convert slice can target (`DeviceGray` / `DeviceRGB` / `DeviceCMYK`).
+///
+/// Every other `ColorSpace` shape (`IccBased`, `Lab`, `CalGray`, `CalRgb`,
+/// `Indexed`, `Separation`, `DeviceN`, `Pattern`, `Resource`, `Unknown`) is
+/// treated as non-process for this slice.
+const fn is_process_space(space: &ColorSpace) -> bool {
+    matches!(
+        space,
+        ColorSpace::DeviceGray | ColorSpace::DeviceRgb | ColorSpace::DeviceCmyk
+    )
+}
+
+/// Return the skip reason for a capability-passing matched entry, or `None` when
+/// the entry is an action target.
+///
+/// `ConvertColor` additionally requires at least one process device color
+/// observation; `SpreadText` and `MinimumStrokeWidth` rely on the capability
+/// check alone and never skip here.
+fn action_skip_reason(action: &Action, entry: &InventoryEntry) -> Option<SkipReason> {
+    match action {
+        Action::ConvertColor(_) => {
+            let has_process_color = entry
+                .colors
+                .iter()
+                .any(|color| is_process_space(&color.space));
+            (!has_process_color).then_some(SkipReason::NonProcessColor)
+        }
+        Action::SpreadText(_) | Action::MinimumStrokeWidth(_) => None,
+    }
 }
 
 /// Evaluate a recipe against an inventory and return a deterministic no-op plan.
 ///
 /// Selectors are evaluated against entries in inventory order. Matching entries
-/// that advertise the action's required edit capability become targets; matching
-/// entries without that capability are reported as structured skips.
+/// without the action's required edit capability are reported as
+/// `UnsupportedCapability` skips. For `ConvertColor`, capability-passing entries
+/// become targets only when they carry a process device color observation;
+/// otherwise they are reported as `NonProcessColor` skips. `SpreadText` and
+/// `MinimumStrokeWidth` treat every capability-passing entry as a target.
 #[must_use]
 pub fn plan_recipe(recipe: &Recipe, inventory: &Inventory) -> PatchPlan {
     let steps = recipe
@@ -157,13 +196,19 @@ fn plan_step(step: &RecipeStep, inventory: &Inventory) -> ActionPlan {
             continue;
         }
 
-        if entry.capabilities.contains(&required) {
-            targets.push(entry.id.clone());
+        // The capability check takes precedence over per-action eligibility.
+        let skip_reason = if entry.capabilities.contains(&required) {
+            action_skip_reason(&step.action, entry)
         } else {
-            skipped.push(SkippedTarget {
+            Some(SkipReason::UnsupportedCapability { required })
+        };
+
+        match skip_reason {
+            Some(reason) => skipped.push(SkippedTarget {
                 object: entry.id.clone(),
-                reason: SkipReason::UnsupportedCapability { required },
-            });
+                reason,
+            }),
+            None => targets.push(entry.id.clone()),
         }
     }
 
@@ -177,14 +222,15 @@ fn plan_step(step: &RecipeStep, inventory: &Inventory) -> ActionPlan {
 #[cfg(test)]
 mod tests {
     use presslint_core::{
-        ContentScope, EditCapability, ObjectId, ObjectKind, PageIndex, Provenance,
+        ColorObservation, ColorSpace, ColorUsage, ContentScope, EditCapability, ObjectId,
+        ObjectKind, PageIndex, Provenance,
     };
     use presslint_inventory::{Inventory, InventoryEntry};
     use presslint_selectors::{Predicate, Selector};
 
     use super::{
         Action, ConvertColor, MinimumStrokeWidth, PatchPlanMode, Recipe, RecipeStep, SkipReason,
-        SpreadText, plan_recipe,
+        SkippedTarget, SpreadText, plan_recipe,
     };
 
     fn object_id(sequence: u32) -> ObjectId {
@@ -217,6 +263,37 @@ mod tests {
         }
     }
 
+    fn color_entry(
+        sequence: u32,
+        kind: ObjectKind,
+        capabilities: impl IntoIterator<Item = EditCapability>,
+        colors: impl IntoIterator<Item = ColorObservation>,
+    ) -> InventoryEntry {
+        InventoryEntry {
+            colors: colors.into_iter().collect(),
+            ..entry(sequence, kind, capabilities)
+        }
+    }
+
+    fn fill_color(space: ColorSpace) -> ColorObservation {
+        ColorObservation {
+            usage: ColorUsage::Fill,
+            space,
+            components: Vec::new(),
+            spot_name: None,
+            source: None,
+        }
+    }
+
+    fn convert_color_step(select: Selector) -> RecipeStep {
+        recipe_step(
+            select,
+            Action::ConvertColor(ConvertColor {
+                target: "pso-coated-v3".to_owned(),
+            }),
+        )
+    }
+
     fn recipe_step(select: Selector, action: Action) -> RecipeStep {
         RecipeStep { select, action }
     }
@@ -225,23 +302,28 @@ mod tests {
     fn plan_recipe_preserves_selector_matches_in_inventory_order() {
         let inventory = Inventory {
             entries: vec![
-                entry(2, ObjectKind::Vector, [EditCapability::RewriteColorOperand]),
+                color_entry(
+                    2,
+                    ObjectKind::Vector,
+                    [EditCapability::RewriteColorOperand],
+                    [fill_color(ColorSpace::DeviceCmyk)],
+                ),
                 entry(1, ObjectKind::Text, [EditCapability::AddTextSpreadStroke]),
-                entry(3, ObjectKind::Vector, [EditCapability::RewriteColorOperand]),
+                color_entry(
+                    3,
+                    ObjectKind::Vector,
+                    [EditCapability::RewriteColorOperand],
+                    [fill_color(ColorSpace::DeviceRgb)],
+                ),
             ],
         };
         let recipe = Recipe {
             schema_version: 1,
-            steps: vec![recipe_step(
-                Selector::Predicate {
-                    predicate: Predicate::ObjectKind {
-                        object_kind: ObjectKind::Vector,
-                    },
+            steps: vec![convert_color_step(Selector::Predicate {
+                predicate: Predicate::ObjectKind {
+                    object_kind: ObjectKind::Vector,
                 },
-                Action::ConvertColor(ConvertColor {
-                    target: "pso-coated-v3".to_owned(),
-                }),
-            )],
+            })],
         };
 
         let plan = plan_recipe(&recipe, &inventory);
@@ -304,13 +386,13 @@ mod tests {
         assert_eq!(
             step.skipped,
             vec![
-                super::SkippedTarget {
+                SkippedTarget {
                     object: object_id(1),
                     reason: SkipReason::UnsupportedCapability {
                         required: EditCapability::AddTextSpreadStroke,
                     },
                 },
-                super::SkippedTarget {
+                SkippedTarget {
                     object: object_id(3),
                     reason: SkipReason::UnsupportedCapability {
                         required: EditCapability::AddTextSpreadStroke,
@@ -318,5 +400,178 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn convert_color_accepts_process_device_fill_target() {
+        let inventory = Inventory {
+            entries: vec![color_entry(
+                1,
+                ObjectKind::Vector,
+                [EditCapability::RewriteColorOperand],
+                [fill_color(ColorSpace::DeviceCmyk)],
+            )],
+        };
+        let recipe = Recipe {
+            schema_version: 1,
+            steps: vec![convert_color_step(Selector::All)],
+        };
+
+        let plan = plan_recipe(&recipe, &inventory);
+        let step = &plan.steps[0];
+
+        assert_eq!(step.targets, vec![object_id(1)]);
+        assert!(step.skipped.is_empty());
+    }
+
+    #[test]
+    fn convert_color_skips_spot_separation_as_non_process() {
+        let inventory = Inventory {
+            entries: vec![color_entry(
+                1,
+                ObjectKind::Vector,
+                [EditCapability::RewriteColorOperand],
+                [fill_color(ColorSpace::Separation)],
+            )],
+        };
+        let recipe = Recipe {
+            schema_version: 1,
+            steps: vec![convert_color_step(Selector::All)],
+        };
+
+        let plan = plan_recipe(&recipe, &inventory);
+        let step = &plan.steps[0];
+
+        assert!(step.targets.is_empty());
+        assert_eq!(
+            step.skipped,
+            vec![SkippedTarget {
+                object: object_id(1),
+                reason: SkipReason::NonProcessColor,
+            }]
+        );
+    }
+
+    #[test]
+    fn convert_color_accepts_mixed_observation_entry() {
+        let inventory = Inventory {
+            entries: vec![color_entry(
+                1,
+                ObjectKind::Vector,
+                [EditCapability::RewriteColorOperand],
+                [
+                    fill_color(ColorSpace::Separation),
+                    fill_color(ColorSpace::DeviceGray),
+                ],
+            )],
+        };
+        let recipe = Recipe {
+            schema_version: 1,
+            steps: vec![convert_color_step(Selector::All)],
+        };
+
+        let plan = plan_recipe(&recipe, &inventory);
+        let step = &plan.steps[0];
+
+        assert_eq!(step.targets, vec![object_id(1)]);
+        assert!(step.skipped.is_empty());
+    }
+
+    #[test]
+    fn convert_color_skips_entry_without_color_observations() {
+        let inventory = Inventory {
+            entries: vec![entry(
+                1,
+                ObjectKind::Vector,
+                [EditCapability::RewriteColorOperand],
+            )],
+        };
+        let recipe = Recipe {
+            schema_version: 1,
+            steps: vec![convert_color_step(Selector::All)],
+        };
+
+        let plan = plan_recipe(&recipe, &inventory);
+        let step = &plan.steps[0];
+
+        assert!(step.targets.is_empty());
+        assert_eq!(
+            step.skipped,
+            vec![SkippedTarget {
+                object: object_id(1),
+                reason: SkipReason::NonProcessColor,
+            }]
+        );
+    }
+
+    #[test]
+    fn convert_color_unsupported_capability_precedes_non_process() {
+        let inventory = Inventory {
+            entries: vec![color_entry(
+                1,
+                ObjectKind::Vector,
+                [EditCapability::ReadOnly],
+                [fill_color(ColorSpace::Separation)],
+            )],
+        };
+        let recipe = Recipe {
+            schema_version: 1,
+            steps: vec![convert_color_step(Selector::All)],
+        };
+
+        let plan = plan_recipe(&recipe, &inventory);
+        let step = &plan.steps[0];
+
+        assert!(step.targets.is_empty());
+        assert_eq!(
+            step.skipped,
+            vec![SkippedTarget {
+                object: object_id(1),
+                reason: SkipReason::UnsupportedCapability {
+                    required: EditCapability::RewriteColorOperand,
+                },
+            }]
+        );
+    }
+
+    #[test]
+    fn non_color_actions_ignore_process_color_eligibility() {
+        let inventory = Inventory {
+            entries: vec![
+                entry(1, ObjectKind::Text, [EditCapability::AddTextSpreadStroke]),
+                entry(2, ObjectKind::Vector, [EditCapability::AdjustStrokeWidth]),
+            ],
+        };
+        let recipe = Recipe {
+            schema_version: 1,
+            steps: vec![
+                recipe_step(
+                    Selector::Predicate {
+                        predicate: Predicate::ObjectKind {
+                            object_kind: ObjectKind::Text,
+                        },
+                    },
+                    Action::SpreadText(SpreadText {
+                        amount_pt: 0.1,
+                        overprint: false,
+                    }),
+                ),
+                recipe_step(
+                    Selector::Predicate {
+                        predicate: Predicate::ObjectKind {
+                            object_kind: ObjectKind::Vector,
+                        },
+                    },
+                    Action::MinimumStrokeWidth(MinimumStrokeWidth { width_pt: 0.25 }),
+                ),
+            ],
+        };
+
+        let plan = plan_recipe(&recipe, &inventory);
+
+        assert_eq!(plan.steps[0].targets, vec![object_id(1)]);
+        assert!(plan.steps[0].skipped.is_empty());
+        assert_eq!(plan.steps[1].targets, vec![object_id(2)]);
+        assert!(plan.steps[1].skipped.is_empty());
     }
 }
