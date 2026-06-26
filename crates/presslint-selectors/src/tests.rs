@@ -3,7 +3,8 @@
 mod json;
 
 use presslint_core::{
-    ColorSpace, ContentScope, EditCapability, ObjectId, ObjectKind, PageIndex, Provenance,
+    ColorObservation, ColorSpace, ColorUsage, ContentScope, EditCapability, ObjectId, ObjectKind,
+    PageIndex, Provenance,
 };
 use presslint_inventory::InventoryEntry;
 use serde::{Deserialize, Serialize};
@@ -231,7 +232,56 @@ fn scope_predicate_has_stable_json_shape() {
     );
 }
 
-fn entry_with_scope(scope: ContentScope) -> InventoryEntry {
+#[test]
+fn color_usage_predicate_has_stable_json_shape() {
+    assert_predicate_json(
+        &Predicate::ColorUsage {
+            usage: ColorUsage::Fill,
+        },
+        Json::object([
+            ("kind", Json::string("color_usage")),
+            ("usage", Json::string("fill")),
+        ]),
+    );
+    assert_predicate_json(
+        &Predicate::ColorUsage {
+            usage: ColorUsage::Stroke,
+        },
+        Json::object([
+            ("kind", Json::string("color_usage")),
+            ("usage", Json::string("stroke")),
+        ]),
+    );
+    assert_selector_json(
+        &Selector::Predicate {
+            predicate: Predicate::ColorUsage {
+                usage: ColorUsage::Image,
+            },
+        },
+        Json::object([
+            ("op", Json::string("predicate")),
+            (
+                "predicate",
+                Json::object([
+                    ("kind", Json::string("color_usage")),
+                    ("usage", Json::string("image")),
+                ]),
+            ),
+        ]),
+    );
+}
+
+fn color_observation(usage: ColorUsage) -> ColorObservation {
+    ColorObservation {
+        usage,
+        space: ColorSpace::DeviceCmyk,
+        components: Vec::new(),
+        spot_name: None,
+        source: None,
+    }
+}
+
+fn inventory_entry(scope: ContentScope, colors: Vec<ColorObservation>) -> InventoryEntry {
     InventoryEntry {
         id: ObjectId {
             page: PageIndex(0),
@@ -245,9 +295,50 @@ fn entry_with_scope(scope: ContentScope) -> InventoryEntry {
             range: None,
         },
         bounds: None,
-        colors: Vec::new(),
+        colors,
         capabilities: Vec::new(),
     }
+}
+
+fn entry_with_colors(colors: Vec<ColorObservation>) -> InventoryEntry {
+    inventory_entry(ContentScope::Page, colors)
+}
+
+fn color_usage_selector(usage: ColorUsage) -> Selector {
+    Selector::Predicate {
+        predicate: Predicate::ColorUsage { usage },
+    }
+}
+
+#[test]
+fn color_usage_predicate_matches_single_matching_observation() {
+    let entry = entry_with_colors(vec![color_observation(ColorUsage::Fill)]);
+    assert!(matches(&color_usage_selector(ColorUsage::Fill), &entry));
+}
+
+#[test]
+fn color_usage_predicate_does_not_match_without_usage() {
+    let entry = entry_with_colors(vec![color_observation(ColorUsage::Fill)]);
+    assert!(!matches(&color_usage_selector(ColorUsage::Stroke), &entry));
+}
+
+#[test]
+fn color_usage_predicate_matches_one_of_multiple_observations() {
+    let entry = entry_with_colors(vec![
+        color_observation(ColorUsage::Fill),
+        color_observation(ColorUsage::Stroke),
+    ]);
+    assert!(matches(&color_usage_selector(ColorUsage::Stroke), &entry));
+}
+
+#[test]
+fn color_usage_predicate_does_not_match_entry_without_observations() {
+    let entry = entry_with_colors(Vec::new());
+    assert!(!matches(&color_usage_selector(ColorUsage::Fill), &entry));
+}
+
+fn entry_with_scope(scope: ContentScope) -> InventoryEntry {
+    inventory_entry(scope, Vec::new())
 }
 
 fn scope_selector(scope: ContentScope) -> Selector {

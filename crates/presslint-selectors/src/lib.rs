@@ -2,7 +2,7 @@
 
 #![forbid(unsafe_code)]
 
-use presslint_core::{ColorSpace, ContentScope, ObjectKind, PageIndex};
+use presslint_core::{ColorSpace, ColorUsage, ContentScope, ObjectKind, PageIndex};
 use presslint_inventory::InventoryEntry;
 use serde::{Deserialize, Serialize};
 
@@ -65,6 +65,11 @@ pub enum Predicate {
         /// Content scope matched by equality against `provenance.scope`.
         scope: ContentScope,
     },
+    /// Match observed color usage.
+    ColorUsage {
+        /// Color usage to match.
+        usage: ColorUsage,
+    },
 }
 
 /// Evaluate a selector against one inventory entry.
@@ -87,6 +92,7 @@ fn matches_predicate(predicate: &Predicate, entry: &InventoryEntry) -> bool {
         Predicate::Page { page } => entry.id.page == *page,
         Predicate::Editable { capability } => entry.capabilities.contains(capability),
         Predicate::Scope { scope } => entry.provenance.scope == *scope,
+        Predicate::ColorUsage { usage } => entry.colors.iter().any(|color| color.usage == *usage),
     }
 }
 

@@ -4,10 +4,13 @@
 
 - Defines serializable boolean selector expressions and leaf predicates.
 - Current predicates cover object kind, observed color space, page index,
-  edit capability, and content scope.
+  edit capability, content scope, and observed color usage.
 - Provides an in-memory matcher over `presslint_inventory::InventoryEntry`.
 - The content-scope predicate matches by full `ContentScope` equality against
   `entry.provenance.scope`, including the form `XObject` resource name.
+- The color-usage predicate matches when any `ColorObservation` on the entry
+  carries the requested `ColorUsage`, mirroring the color-space predicate's
+  any-observation semantics.
 - Focused serde tests lock the public JSON shape for selector boolean variants
   and predicate fixtures, including page, named form-XObject, and annotation
   appearance scope fixtures.
