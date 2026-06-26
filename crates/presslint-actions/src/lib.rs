@@ -130,6 +130,10 @@ pub enum SkipReason {
     /// carries no process device color observation (`DeviceGray` /
     /// `DeviceRGB` / `DeviceCMYK`) that the no-op planner can target.
     NonProcessColor,
+    /// The matched `ConvertColor` entry carries at least one process device
+    /// color observation, but none has source byte provenance for the color
+    /// operand record that a future patch would rewrite.
+    MissingColorSource,
 }
 
 /// Return true when `space` is one of the three process device color spaces the
@@ -154,11 +158,22 @@ const fn is_process_space(space: &ColorSpace) -> bool {
 fn action_skip_reason(action: &Action, entry: &InventoryEntry) -> Option<SkipReason> {
     match action {
         Action::ConvertColor(_) => {
-            let has_process_color = entry
-                .colors
-                .iter()
-                .any(|color| is_process_space(&color.space));
-            (!has_process_color).then_some(SkipReason::NonProcessColor)
+            let mut has_process_color = false;
+
+            for color in &entry.colors {
+                if is_process_space(&color.space) {
+                    if color.source.is_some() {
+                        return None;
+                    }
+                    has_process_color = true;
+                }
+            }
+
+            Some(if has_process_color {
+                SkipReason::MissingColorSource
+            } else {
+                SkipReason::NonProcessColor
+            })
         }
         Action::SpreadText(_) | Action::MinimumStrokeWidth(_) => None,
     }
@@ -169,9 +184,12 @@ fn action_skip_reason(action: &Action, entry: &InventoryEntry) -> Option<SkipRea
 /// Selectors are evaluated against entries in inventory order. Matching entries
 /// without the action's required edit capability are reported as
 /// `UnsupportedCapability` skips. For `ConvertColor`, capability-passing entries
-/// become targets only when they carry a process device color observation;
-/// otherwise they are reported as `NonProcessColor` skips. `SpreadText` and
-/// `MinimumStrokeWidth` treat every capability-passing entry as a target.
+/// become targets only when they carry a process device color observation with
+/// source byte provenance. Capability-passing entries with no process device
+/// color are reported as `NonProcessColor`; entries with process device color
+/// but no sourced color operand are reported as `MissingColorSource`.
+/// `SpreadText` and `MinimumStrokeWidth` treat every capability-passing entry
+/// as a target.
 #[must_use]
 pub fn plan_recipe(recipe: &Recipe, inventory: &Inventory) -> PatchPlan {
     let steps = recipe
@@ -222,8 +240,8 @@ fn plan_step(step: &RecipeStep, inventory: &Inventory) -> ActionPlan {
 #[cfg(test)]
 mod tests {
     use presslint_core::{
-        ColorObservation, ColorSpace, ColorUsage, ContentScope, EditCapability, ObjectId,
-        ObjectKind, PageIndex, Provenance,
+        ByteRange, ColorObservation, ColorSpace, ColorUsage, ContentScope, EditCapability,
+        ObjectId, ObjectKind, PageIndex, Provenance,
     };
     use presslint_inventory::{Inventory, InventoryEntry};
     use presslint_selectors::{Predicate, Selector};
@@ -276,12 +294,20 @@ mod tests {
     }
 
     fn fill_color(space: ColorSpace) -> ColorObservation {
+        fill_color_with_source(space, None)
+    }
+
+    fn sourced_fill_color(space: ColorSpace, start: usize, end: usize) -> ColorObservation {
+        fill_color_with_source(space, Some(ByteRange { start, end }))
+    }
+
+    fn fill_color_with_source(space: ColorSpace, source: Option<ByteRange>) -> ColorObservation {
         ColorObservation {
             usage: ColorUsage::Fill,
             space,
             components: Vec::new(),
             spot_name: None,
-            source: None,
+            source,
         }
     }
 
@@ -306,14 +332,14 @@ mod tests {
                     2,
                     ObjectKind::Vector,
                     [EditCapability::RewriteColorOperand],
-                    [fill_color(ColorSpace::DeviceCmyk)],
+                    [sourced_fill_color(ColorSpace::DeviceCmyk, 0, 8)],
                 ),
                 entry(1, ObjectKind::Text, [EditCapability::AddTextSpreadStroke]),
                 color_entry(
                     3,
                     ObjectKind::Vector,
                     [EditCapability::RewriteColorOperand],
-                    [fill_color(ColorSpace::DeviceRgb)],
+                    [sourced_fill_color(ColorSpace::DeviceRgb, 20, 29)],
                 ),
             ],
         };
@@ -403,13 +429,13 @@ mod tests {
     }
 
     #[test]
-    fn convert_color_accepts_process_device_fill_target() {
+    fn convert_color_accepts_sourced_process_device_fill_target() {
         let inventory = Inventory {
             entries: vec![color_entry(
                 1,
                 ObjectKind::Vector,
                 [EditCapability::RewriteColorOperand],
-                [fill_color(ColorSpace::DeviceCmyk)],
+                [sourced_fill_color(ColorSpace::DeviceCmyk, 0, 8)],
             )],
         };
         let recipe = Recipe {
@@ -422,6 +448,34 @@ mod tests {
 
         assert_eq!(step.targets, vec![object_id(1)]);
         assert!(step.skipped.is_empty());
+    }
+
+    #[test]
+    fn convert_color_skips_process_device_color_without_source() {
+        let inventory = Inventory {
+            entries: vec![color_entry(
+                1,
+                ObjectKind::Vector,
+                [EditCapability::RewriteColorOperand],
+                [fill_color(ColorSpace::DeviceRgb)],
+            )],
+        };
+        let recipe = Recipe {
+            schema_version: 1,
+            steps: vec![convert_color_step(Selector::All)],
+        };
+
+        let plan = plan_recipe(&recipe, &inventory);
+        let step = &plan.steps[0];
+
+        assert!(step.targets.is_empty());
+        assert_eq!(
+            step.skipped,
+            vec![SkippedTarget {
+                object: object_id(1),
+                reason: SkipReason::MissingColorSource,
+            }]
+        );
     }
 
     #[test]
@@ -461,7 +515,7 @@ mod tests {
                 [EditCapability::RewriteColorOperand],
                 [
                     fill_color(ColorSpace::Separation),
-                    fill_color(ColorSpace::DeviceGray),
+                    sourced_fill_color(ColorSpace::DeviceGray, 10, 13),
                 ],
             )],
         };
@@ -505,13 +559,13 @@ mod tests {
     }
 
     #[test]
-    fn convert_color_unsupported_capability_precedes_non_process() {
+    fn convert_color_unsupported_capability_precedes_color_source_checks() {
         let inventory = Inventory {
             entries: vec![color_entry(
                 1,
                 ObjectKind::Vector,
                 [EditCapability::ReadOnly],
-                [fill_color(ColorSpace::Separation)],
+                [fill_color(ColorSpace::DeviceRgb)],
             )],
         };
         let recipe = Recipe {
