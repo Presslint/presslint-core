@@ -23,6 +23,17 @@
 - Actions are requests only; they do not mutate documents directly.
 - Depends on `presslint-selectors` for selector data and `presslint-core` for
   object identities and edit capabilities.
+- The public JSON encoding of `Recipe`, `RecipeStep`, every `Action` variant,
+  `PatchPlan`, `PatchPlanMode`, `ActionPlan`, `SkippedTarget`, and every
+  `SkipReason` variant is locked by focused serde shape tests. Each fixture
+  asserts a full round-trip and pins the externally-tagged `action`/`reason`
+  field names and `snake_case` variant names exactly as the current
+  `#[serde(...)]` attributes emit them.
+- Tests are split into `src/tests.rs` (planner behavior plus the shape tests)
+  and `src/tests/json.rs`, a dependency-free in-memory JSON serde harness
+  modeled on `presslint-selectors` and extended with `bool`/`f64` scalars for
+  the action payloads. `src/lib.rs` holds production code only. No `serde_json`
+  or other dependency is added.
 
 ## Follow-Ups
 
