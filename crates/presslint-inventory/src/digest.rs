@@ -13,7 +13,7 @@ pub fn vector_object_digest(
     colors: &[ColorObservation],
 ) -> [u8; 32] {
     let mut digest = StableDigest::new();
-    digest.push_bytes(b"presslint.vector.v1");
+    digest.push_bytes(b"presslint.vector.v2");
     digest.push_u32(page.0);
     digest.push_u32(sequence);
     digest.push_scope(scope);
@@ -37,7 +37,7 @@ pub fn text_object_digest(
     colors: &[ColorObservation],
 ) -> [u8; 32] {
     let mut digest = StableDigest::new();
-    digest.push_bytes(b"presslint.text.v1");
+    digest.push_bytes(b"presslint.text.v2");
     digest.push_u32(page.0);
     digest.push_u32(sequence);
     digest.push_scope(scope);
@@ -61,7 +61,7 @@ pub fn image_object_digest(
     colors: &[ColorObservation],
 ) -> [u8; 32] {
     let mut digest = StableDigest::new();
-    digest.push_bytes(b"presslint.image.v1");
+    digest.push_bytes(b"presslint.image.v2");
     digest.push_u32(page.0);
     digest.push_u32(sequence);
     digest.push_scope(scope);
@@ -157,6 +157,13 @@ impl StableDigest {
             Some(name) => {
                 self.push_u8(1);
                 self.push_bytes(&name.0);
+            }
+            None => self.push_u8(0),
+        }
+        match color.source {
+            Some(range) => {
+                self.push_u8(1);
+                self.push_range(range);
             }
             None => self.push_u8(0),
         }

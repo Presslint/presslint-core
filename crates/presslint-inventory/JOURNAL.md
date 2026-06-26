@@ -21,6 +21,16 @@
   carrying caller-provided page/content scope, path-paint byte provenance,
   observed stroke/fill colors, deterministic object IDs, and color-operand
   rewrite capability.
+- `GraphicsDeviceColor` records the device-color operator's record byte range as
+  the color `source`. The range is stamped when `G`/`g`/`RG`/`rg`/`K`/`k` set
+  the color, travels with the saved snapshot across `q`/`Q`, and is surfaced on
+  vector/text `ColorObservation`s so they point at the color operator rather
+  than the paint/text-show operator. The page-default color and the synthesized
+  image observation carry `None`. The stroking/nonstroking setters share a
+  single `sourced_device_color` helper that resolves the operator and stamps its
+  record range, keeping the source invariant in one place. Digest version tags
+  were bumped to `presslint.vector.v2`/`.text.v2`/`.image.v2` to make the
+  object-ID change explicit, and a locked digest test pins the new value.
 - Builds the first text inventory slice from text-showing events, carrying
   caller-provided page/content scope, text-showing byte provenance, unset
   bounds, deterministic object IDs, and color observations for supported

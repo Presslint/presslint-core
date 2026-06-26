@@ -16,16 +16,34 @@ pub struct GraphicsDeviceColor {
     pub space: ColorSpace,
     /// Components in source-space order.
     pub components: Vec<f64>,
+    /// Record byte range of the operator that set this colour.
+    ///
+    /// `None` for the page-default/inherited colour; `Some(range)` once a
+    /// device-colour operator in the walked stream established it. The range
+    /// travels with the colour through `q`/`Q` save/restore.
+    pub source: Option<ByteRange>,
 }
 
 impl GraphicsDeviceColor {
-    /// Create a graphics-state colour snapshot.
+    /// Create a graphics-state colour snapshot with no recorded source.
+    ///
+    /// The page-default colour and any colour whose origin is unknown use this
+    /// constructor; the walker stamps `source` when a device-colour operator
+    /// sets the colour.
     #[must_use]
     pub const fn new(space: ColorSpace, components: Vec<f64>) -> Self {
-        Self { space, components }
+        Self {
+            space,
+            components,
+            source: None,
+        }
     }
 
     /// Return this colour as an inventory colour observation.
+    ///
+    /// The observation carries the colour-setting operator's record range as
+    /// its `source`, so callers can map the observed colour back to the bytes
+    /// that established it.
     #[must_use]
     pub fn observation(&self, usage: ColorUsage) -> ColorObservation {
         ColorObservation {
@@ -33,6 +51,7 @@ impl GraphicsDeviceColor {
             space: self.space.clone(),
             components: self.components.clone(),
             spot_name: None,
+            source: self.source,
         }
     }
 }
@@ -484,7 +503,7 @@ impl GraphicsStateWalker {
         space: ColorSpace,
         count: usize,
     ) -> Result<GraphicsStateEventKind, GraphicsWalkError> {
-        let color = device_color(source, operator, record, space, count)?;
+        let color = sourced_device_color(source, operator, record, space, count)?;
         self.state.stroking_color = color.clone();
         Ok(GraphicsStateEventKind::SetStrokingDeviceColor { color })
     }
@@ -497,7 +516,7 @@ impl GraphicsStateWalker {
         space: ColorSpace,
         count: usize,
     ) -> Result<GraphicsStateEventKind, GraphicsWalkError> {
-        let color = device_color(source, operator, record, space, count)?;
+        let color = sourced_device_color(source, operator, record, space, count)?;
         self.state.nonstroking_color = color.clone();
         Ok(GraphicsStateEventKind::SetNonstrokingDeviceColor { color })
     }
@@ -542,6 +561,24 @@ impl Default for GraphicsStateWalker {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Resolve a device-colour operator and stamp its own record range as the
+/// colour source.
+///
+/// Both the stroking and nonstroking setters share this: the colour-setting
+/// operator records where it was set so paint/text-show observations can map
+/// the colour back to those bytes.
+fn sourced_device_color(
+    source: &[u8],
+    operator: &[u8],
+    record: &OperatorRecord,
+    space: ColorSpace,
+    count: usize,
+) -> Result<GraphicsDeviceColor, GraphicsWalkError> {
+    let mut color = device_color(source, operator, record, space, count)?;
+    color.source = Some(record.range);
+    Ok(color)
 }
 
 /// Walk assembled operator records into ordered graphics-state events.

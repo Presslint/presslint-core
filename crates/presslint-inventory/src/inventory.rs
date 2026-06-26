@@ -313,5 +313,7 @@ const fn image_color_observation() -> ColorObservation {
         space: ColorSpace::Unknown,
         components: Vec::new(),
         spot_name: None,
+        // Synthesized observation: no color-setting operator produced it.
+        source: None,
     }
 }

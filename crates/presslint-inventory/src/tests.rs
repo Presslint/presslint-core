@@ -122,7 +122,11 @@ fn path_paint_event_carries_post_operator_snapshot_and_provenance() -> Result<()
     assert_ctm_near(event.state.ctm, [2.0, 0.0, 0.0, 2.0, 8.0, 9.0]);
     assert_eq!(
         event.state.nonstroking_color,
-        super::GraphicsDeviceColor::new(ColorSpace::DeviceGray, vec![0.25])
+        super::GraphicsDeviceColor {
+            space: ColorSpace::DeviceGray,
+            components: vec![0.25],
+            source: Some(ByteRange { start: 0, end: 6 }),
+        }
     );
     assert_eq!(event.record_range.start, 22);
     assert_eq!(event.operator_range.end, 24);
@@ -562,3 +566,143 @@ fn image_inventory_object_ids_are_deterministic() -> Result<(), String> {
     assert_ne!(first.entries[0].id.digest, first.entries[1].id.digest);
     Ok(())
 }
+
+#[test]
+fn fill_color_observation_carries_color_operator_source_not_paint_source() -> Result<(), String> {
+    let inventory = vector_inventory(b"1 0 0 rg f", &ContentScope::Page)?;
+    let entry = inventory.entries.first().ok_or("missing vector entry")?;
+
+    // The paint operator `f` sits at bytes 9..10; the color source must point
+    // at the `rg` color-setting record (bytes 0..8), not the paint record.
+    assert_eq!(
+        entry.provenance.range,
+        Some(ByteRange { start: 9, end: 10 })
+    );
+    assert_eq!(entry.colors.len(), 1);
+    assert_eq!(entry.colors[0].usage, ColorUsage::Fill);
+    assert_eq!(entry.colors[0].source, Some(ByteRange { start: 0, end: 8 }));
+    Ok(())
+}
+
+#[test]
+fn default_color_observation_has_no_source() -> Result<(), String> {
+    let inventory = vector_inventory(b"f", &ContentScope::Page)?;
+    let entry = inventory.entries.first().ok_or("missing vector entry")?;
+
+    assert_eq!(entry.colors.len(), 1);
+    assert_eq!(entry.colors[0].usage, ColorUsage::Fill);
+    assert_eq!(entry.colors[0].source, None);
+    Ok(())
+}
+
+#[test]
+fn color_source_is_restored_after_save_restore() -> Result<(), String> {
+    // `1 0 0 rg` (bytes 0..8) sets the fill source; `0 g` (bytes 11..14)
+    // overrides it inside the `q`...`Q` block; after `Q` the source must be
+    // restored to the `rg` record range, and the `f` paint observes it.
+    let inventory = vector_inventory(b"1 0 0 rg q 0 g Q f", &ContentScope::Page)?;
+    let entry = inventory.entries.first().ok_or("missing vector entry")?;
+
+    assert_eq!(entry.colors.len(), 1);
+    assert_eq!(entry.colors[0].usage, ColorUsage::Fill);
+    assert_eq!(entry.colors[0].source, Some(ByteRange { start: 0, end: 8 }));
+    Ok(())
+}
+
+#[test]
+fn color_source_inside_save_restore_points_at_inner_operator() -> Result<(), String> {
+    // While the `q`...`Q` block is open, the active fill source must point at
+    // the inner `0 g` record (bytes 11..14), not the outer `rg` record.
+    let inventory = vector_inventory(b"1 0 0 rg q 0 g f Q", &ContentScope::Page)?;
+    let entry = inventory.entries.first().ok_or("missing vector entry")?;
+
+    assert_eq!(entry.colors.len(), 1);
+    assert_eq!(
+        entry.colors[0].source,
+        Some(ByteRange { start: 11, end: 14 })
+    );
+    Ok(())
+}
+
+#[test]
+fn synthesized_image_color_observation_has_no_source() -> Result<(), String> {
+    let inventory = image_inventory(
+        b"/Photo Do",
+        &ContentScope::Page,
+        &[PdfName(b"Photo".to_vec())],
+    )?;
+    let entry = inventory.entries.first().ok_or("missing image entry")?;
+
+    assert_eq!(entry.colors.len(), 1);
+    assert_eq!(entry.colors[0].usage, ColorUsage::Image);
+    assert_eq!(entry.colors[0].source, None);
+    Ok(())
+}
+
+#[test]
+fn stroke_color_observation_carries_color_operator_source() -> Result<(), String> {
+    // `0.1 0.2 0.3 RG` occupies bytes 0..14; the `S` paint observes that range
+    // as the stroke color source.
+    let inventory = vector_inventory(b"0.1 0.2 0.3 RG S", &ContentScope::Page)?;
+    let entry = inventory.entries.first().ok_or("missing vector entry")?;
+
+    assert_eq!(entry.colors.len(), 1);
+    assert_eq!(entry.colors[0].usage, ColorUsage::Stroke);
+    assert_eq!(
+        entry.colors[0].source,
+        Some(ByteRange { start: 0, end: 14 })
+    );
+    Ok(())
+}
+
+#[test]
+fn text_color_observation_carries_color_operator_source() -> Result<(), String> {
+    // `0.2 0.3 0.4 rg` occupies bytes 0..14; the `(Hello) Tj` text-showing
+    // operator observes that range as the fill color source.
+    let inventory = text_inventory(b"0.2 0.3 0.4 rg (Hello) Tj", &ContentScope::Page)?;
+    let entry = inventory.entries.first().ok_or("missing text entry")?;
+
+    assert_eq!(entry.colors.len(), 1);
+    assert_eq!(entry.colors[0].usage, ColorUsage::Fill);
+    assert_eq!(
+        entry.colors[0].source,
+        Some(ByteRange { start: 0, end: 14 })
+    );
+    Ok(())
+}
+
+#[test]
+fn color_source_changes_object_digest() -> Result<(), String> {
+    // The same paint and color components, but one fill is page-default
+    // (source `None`) and the other was set by `rg` (source `Some`). The
+    // source provenance must change the object digest.
+    let defaulted = vector_inventory(b"f", &ContentScope::Page)?;
+    let sourced = vector_inventory(b"0 0 0 rg f", &ContentScope::Page)?;
+
+    let defaulted_entry = defaulted.entries.first().ok_or("missing default entry")?;
+    let sourced_entry = sourced.entries.first().ok_or("missing sourced entry")?;
+
+    assert_eq!(defaulted_entry.colors[0].source, None);
+    assert_eq!(
+        sourced_entry.colors[0].source,
+        Some(ByteRange { start: 0, end: 8 })
+    );
+    assert_ne!(defaulted_entry.id.digest, sourced_entry.id.digest);
+    Ok(())
+}
+
+#[test]
+fn vector_object_digest_is_locked() -> Result<(), String> {
+    let inventory = vector_inventory(b"1 0 0 rg f", &ContentScope::Page)?;
+    let entry = inventory.entries.first().ok_or("missing vector entry")?;
+
+    assert_eq!(entry.id.digest, VECTOR_DIGEST_RG_FILL);
+    Ok(())
+}
+
+// Locks the `presslint.vector.v2` digest for `1 0 0 rg f` on page 2, sequence 0,
+// page scope, with the fill color source pointing at the `rg` record (0..8).
+const VECTOR_DIGEST_RG_FILL: [u8; 32] = [
+    217, 142, 65, 91, 110, 170, 75, 230, 252, 240, 215, 175, 209, 215, 240, 59, 219, 114, 104, 58,
+    55, 44, 112, 184, 238, 244, 97, 190, 129, 253, 98, 6,
+];

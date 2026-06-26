@@ -135,6 +135,13 @@ pub struct ColorObservation {
     pub components: Vec<f64>,
     /// Spot colorant name for `Separation` / `DeviceN` observations.
     pub spot_name: Option<PdfName>,
+    /// Byte range of the content-stream operator that established this color.
+    ///
+    /// `Some(range)` points at the color-setting operator's record (e.g. the
+    /// `rg`/`g`/`k` operator), not the paint or text-showing operator that
+    /// observed the color. It is `None` for the page-default/inherited color
+    /// and for synthesized observations that no color operator produced.
+    pub source: Option<ByteRange>,
 }
 
 /// High-level class of page object.
