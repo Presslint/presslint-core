@@ -131,9 +131,12 @@ pub enum SkipReason {
     /// `DeviceRGB` / `DeviceCMYK`) that the no-op planner can target.
     NonProcessColor,
     /// The matched `ConvertColor` entry carries at least one process device
-    /// color observation, but none has source byte provenance for the color
-    /// operand record that a future patch would rewrite.
+    /// color observation whose color operand source byte provenance is missing.
     MissingColorSource,
+    /// The matched `ConvertColor` entry carries more than one sourced process
+    /// device color observation, so object-level planning cannot choose a
+    /// single future rewrite operand.
+    AmbiguousColorSource,
 }
 
 /// Return true when `space` is one of the three process device color spaces the
@@ -152,28 +155,34 @@ const fn is_process_space(space: &ColorSpace) -> bool {
 /// Return the skip reason for a capability-passing matched entry, or `None` when
 /// the entry is an action target.
 ///
-/// `ConvertColor` additionally requires at least one process device color
-/// observation; `SpreadText` and `MinimumStrokeWidth` rely on the capability
-/// check alone and never skip here.
+/// `ConvertColor` additionally requires exactly one sourced process device
+/// color observation; `SpreadText` and `MinimumStrokeWidth` rely on the
+/// capability check alone and never skip here.
 fn action_skip_reason(action: &Action, entry: &InventoryEntry) -> Option<SkipReason> {
     match action {
         Action::ConvertColor(_) => {
-            let mut has_process_color = false;
+            let mut process_colors = 0usize;
+            let mut sourced_process_colors = 0usize;
 
             for color in &entry.colors {
                 if is_process_space(&color.space) {
+                    process_colors += 1;
+
                     if color.source.is_some() {
-                        return None;
+                        sourced_process_colors += 1;
                     }
-                    has_process_color = true;
                 }
             }
 
-            Some(if has_process_color {
-                SkipReason::MissingColorSource
+            if process_colors == 0 {
+                Some(SkipReason::NonProcessColor)
+            } else if sourced_process_colors < process_colors {
+                Some(SkipReason::MissingColorSource)
+            } else if sourced_process_colors > 1 {
+                Some(SkipReason::AmbiguousColorSource)
             } else {
-                SkipReason::NonProcessColor
-            })
+                None
+            }
         }
         Action::SpreadText(_) | Action::MinimumStrokeWidth(_) => None,
     }
@@ -184,10 +193,12 @@ fn action_skip_reason(action: &Action, entry: &InventoryEntry) -> Option<SkipRea
 /// Selectors are evaluated against entries in inventory order. Matching entries
 /// without the action's required edit capability are reported as
 /// `UnsupportedCapability` skips. For `ConvertColor`, capability-passing entries
-/// become targets only when they carry a process device color observation with
-/// source byte provenance. Capability-passing entries with no process device
-/// color are reported as `NonProcessColor`; entries with process device color
-/// but no sourced color operand are reported as `MissingColorSource`.
+/// become targets only when they carry exactly one process device color
+/// observation with source byte provenance. Capability-passing entries with no
+/// process device color are reported as `NonProcessColor`; entries with any
+/// process device color missing source byte provenance are reported as
+/// `MissingColorSource`; entries with multiple sourced process device color
+/// observations are reported as `AmbiguousColorSource`.
 /// `SpreadText` and `MinimumStrokeWidth` treat every capability-passing entry
 /// as a target.
 #[must_use]
@@ -451,6 +462,37 @@ mod tests {
     }
 
     #[test]
+    fn convert_color_skips_multiple_sourced_process_device_colors() {
+        let inventory = Inventory {
+            entries: vec![color_entry(
+                1,
+                ObjectKind::Vector,
+                [EditCapability::RewriteColorOperand],
+                [
+                    sourced_fill_color(ColorSpace::DeviceCmyk, 0, 8),
+                    sourced_fill_color(ColorSpace::DeviceRgb, 20, 29),
+                ],
+            )],
+        };
+        let recipe = Recipe {
+            schema_version: 1,
+            steps: vec![convert_color_step(Selector::All)],
+        };
+
+        let plan = plan_recipe(&recipe, &inventory);
+        let step = &plan.steps[0];
+
+        assert!(step.targets.is_empty());
+        assert_eq!(
+            step.skipped,
+            vec![SkippedTarget {
+                object: object_id(1),
+                reason: SkipReason::AmbiguousColorSource,
+            }]
+        );
+    }
+
+    #[test]
     fn convert_color_skips_process_device_color_without_source() {
         let inventory = Inventory {
             entries: vec![color_entry(
@@ -458,6 +500,37 @@ mod tests {
                 ObjectKind::Vector,
                 [EditCapability::RewriteColorOperand],
                 [fill_color(ColorSpace::DeviceRgb)],
+            )],
+        };
+        let recipe = Recipe {
+            schema_version: 1,
+            steps: vec![convert_color_step(Selector::All)],
+        };
+
+        let plan = plan_recipe(&recipe, &inventory);
+        let step = &plan.steps[0];
+
+        assert!(step.targets.is_empty());
+        assert_eq!(
+            step.skipped,
+            vec![SkippedTarget {
+                object: object_id(1),
+                reason: SkipReason::MissingColorSource,
+            }]
+        );
+    }
+
+    #[test]
+    fn convert_color_skips_mixed_sourced_and_unsourced_process_device_color_as_missing_source() {
+        let inventory = Inventory {
+            entries: vec![color_entry(
+                1,
+                ObjectKind::Vector,
+                [EditCapability::RewriteColorOperand],
+                [
+                    sourced_fill_color(ColorSpace::DeviceCmyk, 0, 8),
+                    fill_color(ColorSpace::DeviceRgb),
+                ],
             )],
         };
         let recipe = Recipe {
@@ -561,12 +634,29 @@ mod tests {
     #[test]
     fn convert_color_unsupported_capability_precedes_color_source_checks() {
         let inventory = Inventory {
-            entries: vec![color_entry(
-                1,
-                ObjectKind::Vector,
-                [EditCapability::ReadOnly],
-                [fill_color(ColorSpace::DeviceRgb)],
-            )],
+            entries: vec![
+                color_entry(
+                    1,
+                    ObjectKind::Vector,
+                    [EditCapability::ReadOnly],
+                    [fill_color(ColorSpace::Separation)],
+                ),
+                color_entry(
+                    2,
+                    ObjectKind::Vector,
+                    [EditCapability::ReadOnly],
+                    [fill_color(ColorSpace::DeviceRgb)],
+                ),
+                color_entry(
+                    3,
+                    ObjectKind::Vector,
+                    [EditCapability::ReadOnly],
+                    [
+                        sourced_fill_color(ColorSpace::DeviceCmyk, 0, 8),
+                        sourced_fill_color(ColorSpace::DeviceRgb, 20, 29),
+                    ],
+                ),
+            ],
         };
         let recipe = Recipe {
             schema_version: 1,
@@ -579,12 +669,26 @@ mod tests {
         assert!(step.targets.is_empty());
         assert_eq!(
             step.skipped,
-            vec![SkippedTarget {
-                object: object_id(1),
-                reason: SkipReason::UnsupportedCapability {
-                    required: EditCapability::RewriteColorOperand,
+            vec![
+                SkippedTarget {
+                    object: object_id(1),
+                    reason: SkipReason::UnsupportedCapability {
+                        required: EditCapability::RewriteColorOperand,
+                    },
                 },
-            }]
+                SkippedTarget {
+                    object: object_id(2),
+                    reason: SkipReason::UnsupportedCapability {
+                        required: EditCapability::RewriteColorOperand,
+                    },
+                },
+                SkippedTarget {
+                    object: object_id(3),
+                    reason: SkipReason::UnsupportedCapability {
+                        required: EditCapability::RewriteColorOperand,
+                    },
+                }
+            ]
         );
     }
 

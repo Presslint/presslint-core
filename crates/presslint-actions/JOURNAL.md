@@ -12,11 +12,14 @@
   advertise the rewrite capability but carry no process device color
   observation (`DeviceGray` / `DeviceRGB` / `DeviceCMYK`). Process-color
   entries without a color-operator source range are reported separately as
-  `MissingColorSource`.
+  `MissingColorSource`; entries with multiple sourced process-color operands
+  are reported as `AmbiguousColorSource`.
 - `ConvertColor` process eligibility is a pure planning diagnostic: it never
   converts color or rewrites operands. A target must advertise
-  `RewriteColorOperand` and carry at least one sourced process device color
-  observation. `SpreadText` and `MinimumStrokeWidth` stay capability-only.
+  `RewriteColorOperand` and carry exactly one sourced process device color
+  observation, with no unsourced process device observations. Non-process
+  observations may coexist with that single sourced process operand.
+  `SpreadText` and `MinimumStrokeWidth` stay capability-only.
 - Actions are requests only; they do not mutate documents directly.
 - Depends on `presslint-selectors` for selector data and `presslint-core` for
   object identities and edit capabilities.
