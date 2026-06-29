@@ -269,6 +269,33 @@
   panicking. The only owned allocations are the public report vectors for direct
   kid references and skipped direct entries; no benchmark was added because this
   remains a bounded single-array scan rather than a broader traversal.
+- Adds `inspect_page_tree_node_type`, a focused composition helper for
+  caller-provided bytes and an already-located page-tree object byte offset. It
+  delegates top-level entry discovery to `inspect_indirect_object_dictionary`,
+  matches the single exact raw top-level key bytes `/Type` from each entry's
+  `key_range`, validates the shallow `/Type` value kind as `name`, and
+  classifies the value's exact raw bytes into a `PageTreeNodeType`: `Pages` for
+  `/Pages` (intermediate node), `Page` for `/Page` (leaf page), or `Other` for
+  any other name value. The report carries the delegated
+  `IndirectObjectDictionaryInspection`, the `/Type` key and value byte ranges,
+  and the classified node kind; it retains or copies no PDF bytes, object
+  bodies, stream bodies, page dictionaries, contents streams, or `/Type` name
+  bytes, and an `Other` value stays addressed by `type_value_range`. The
+  classifier compares only exact raw bytes and decodes no PDF name escapes, so
+  an escaped form such as `/Page#73` classifies as `Other`, not `Page`. It never
+  resolves references, follows `/Kids`, `/Parent`, or `/Contents`, descends into
+  child page-tree nodes or page dictionaries, or reads any key other than
+  `/Type`. Structured public rejections distinguish a delegated object-dictionary
+  failure (`ObjectDictionary`), missing `/Type` (`MissingType`), duplicate exact
+  `/Type` (`DuplicateType`), and a non-name `/Type` value (`NonNameTypeValue`),
+  mirroring the `inspect_page_tree_node` / `inspect_catalog_pages` rejection
+  style. It lives in its own `page_tree_node_type.rs` module with a private
+  module-local `find_unique_entry` helper rather than widening the existing
+  private one. A composition test chains `inspect_classic_xref_table ->
+  inspect_classic_xref_trailer_root -> resolve_classic_xref_object ->
+  inspect_catalog_pages -> resolve_classic_xref_object ->
+  inspect_page_tree_node_type` over synthetic bytes to classify a located
+  page-tree root as `/Pages`.
 - Ablation T073: removes an unreachable `OffsetOutOfBounds` remapping from the
   page-tree-kids scanner's successful `parse_indirect_reference` branch. The
   shared indirect-reference parser already bounds successful reports to the
