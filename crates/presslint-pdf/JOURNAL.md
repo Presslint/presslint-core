@@ -296,6 +296,27 @@
   inspect_catalog_pages -> resolve_classic_xref_object ->
   inspect_page_tree_node_type` over synthetic bytes to classify a located
   page-tree root as `/Pages`.
+- Adds `inspect_page_tree_reference_target`, a focused composition helper for
+  caller-provided bytes, an existing `ClassicXrefTableInspection`, and one
+  page-tree `IndirectRef`. It resolves the requested object number through
+  `resolve_classic_xref_object`, accepts only a single in-use xref entry whose
+  generation matches the requested reference, and delegates classification to
+  `inspect_page_tree_node_type` at the resolved byte offset. The report carries
+  the requested reference, resolved object byte offset, xref generation, and the
+  delegated node-type inspection; it retains or copies no PDF bytes, object
+  bodies, stream bodies, page dictionaries, contents streams, or referenced
+  object bytes. Structured public rejections distinguish free/not-found/
+  ambiguous xref outcomes (`UnresolvedXrefLocation`), generation mismatch, and
+  delegated node-type inspection failure with the underlying node-type rejection
+  reason preserved. The helper does not traverse `/Kids`, recurse into page-tree
+  children, parse `/Count`, inspect page contents/resources/annotations, or add
+  caches/indexes around classic xref lookup. A composition test chains trailer
+  root, catalog `/Pages`, page-tree `/Kids`, and one selected kid-reference
+  classification without implementing full page-tree traversal.
+- Ablation T075: removes duplicate page-tree-reference test fixture builders and
+  reuses the existing shared test helpers for indirect references and synthetic
+  classic xref inspections. Runtime behavior, public APIs, and coverage are
+  unchanged.
 - Ablation T073: removes an unreachable `OffsetOutOfBounds` remapping from the
   page-tree-kids scanner's successful `parse_indirect_reference` branch. The
   shared indirect-reference parser already bounds successful reports to the

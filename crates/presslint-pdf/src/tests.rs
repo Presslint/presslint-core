@@ -12,6 +12,7 @@ mod object_header;
 mod page_tree_kids;
 mod page_tree_node;
 mod page_tree_node_type;
+mod page_tree_reference;
 mod source;
 mod trailer;
 mod trailer_root;

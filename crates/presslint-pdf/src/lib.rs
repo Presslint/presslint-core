@@ -21,6 +21,7 @@ mod object_header;
 mod page_tree_kids;
 mod page_tree_node;
 mod page_tree_node_type;
+mod page_tree_reference;
 mod source;
 mod source_utils;
 mod startxref;
@@ -80,6 +81,10 @@ pub use page_tree_node::{
 pub use page_tree_node_type::{
     PageTreeNodeType, PageTreeNodeTypeInspection, PageTreeNodeTypeInspectionError,
     PageTreeNodeTypeInspectionRejection, inspect_page_tree_node_type,
+};
+pub use page_tree_reference::{
+    PageTreeReferenceTargetInspection, PageTreeReferenceTargetInspectionError,
+    PageTreeReferenceTargetInspectionRejection, inspect_page_tree_reference_target,
 };
 pub use source::{
     PDF_HEADER_SCAN_LIMIT, PdfHeader, PdfSourceDiagnostic, PdfSourceInspection,
