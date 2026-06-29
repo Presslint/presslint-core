@@ -47,13 +47,32 @@
   `is_process_device_color_space` private helper defines the process-device
   notion. The helper is pure: no PDF catalog inspection, no `Separation`/`DeviceN`
   reading, no ICC parsing, no tint-transform evaluation, no PDF byte mutation.
+- Adds a report-only overprint-resolution contract:
+  `ObservedOverprintInteraction`, `OverprintSensitivity`,
+  `OverprintMitigation`, `OverprintMitigationAction`, `OverprintRejection`,
+  `OverprintSkipReason`, `SkippedOverprintMitigation`, `OverprintDecision`, and
+  `resolve_overprint_policy`. The helper resolves an `OverprintPolicy` against
+  caller-supplied, PDF-free overprint observations. `Preserve` leaves as is;
+  `RejectUnsafe` is satisfied (`NoUnsafeOverprint`) only when no unsafe
+  interaction is observed and otherwise returns a structured
+  `OverprintRejection::UnsafeOverprintSensitiveConversions` with unsafe
+  observations in caller order; `Mitigate` ignores safe observations and
+  partitions unsafe observations into supported report-only mitigations
+  (`PreserveZeroProcessColorants` for process colorant expansion,
+  `PreserveSpotOverprintAppearance` for spot colorant conversion) and explicit
+  skips (`OverprintSkipReason::UnsupportedInteraction`), preserving caller order
+  in both lists. The helper is pure: no graphics-state or ExtGState inspection,
+  no overprint simulation, no transparency flattening, no color transform, no
+  PDF byte mutation.
 - Focused serde shape tests lock the public JSON encoding of `ColorPolicy`,
   `SpotPolicy`, `OverprintPolicy`, `TransformRequest`, and the output-intent
-  contracts plus the DeviceLink selection contracts. The transform fixture pins
-  the nested `presslint-core::ColorSpace` encoding for both a unit variant
-  (`device_cmyk`) and the `Resource(PdfName)` newtype variant. DeviceLink tests
-  live in `src/tests/devicelink.rs` and spot resolution tests in
-  `src/tests/spot.rs`; the dependency-free JSON harness lives in
+  contracts plus the DeviceLink selection, spot-resolution, and
+  overprint-resolution contracts. The transform fixture pins the nested
+  `presslint-core::ColorSpace` encoding for both a unit variant (`device_cmyk`)
+  and the `Resource(PdfName)` newtype variant. DeviceLink tests live in
+  `src/tests/devicelink.rs`, spot resolution tests in `src/tests/spot.rs`, and
+  overprint resolution tests in `src/tests/overprint.rs`; the dependency-free
+  JSON harness lives in
   `src/tests/json.rs`. The harness rejects `bool`, float, and
   `serde_bytes`-style byte scalars: none of the locked color contracts use them
   (`PdfName` and `EmbeddedBytes` wrap `Vec<u8>`, which serializes
