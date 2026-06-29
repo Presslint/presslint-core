@@ -6,6 +6,7 @@ mod dictionary_entries;
 mod dictionary_extent;
 mod indirect_reference;
 mod object_body;
+mod object_dictionary;
 mod object_header;
 mod source;
 mod trailer;

@@ -1,0 +1,184 @@
+use serde::{Deserialize, Serialize};
+
+use crate::{
+    DictionaryEntryInspectionRejection, DictionaryEntrySpan, IndirectObjectBodyLeadingTokenKind,
+    IndirectObjectBodyTokenInspectionRejection, IndirectObjectHeaderByteRange,
+    IndirectObjectHeaderInspectionRejection, IndirectRef,
+};
+
+/// Top-level dictionary entry spans of a dictionary-bodied indirect object.
+///
+/// This report stores only byte offsets, ranges, a small depth scalar, the
+/// parsed `IndirectRef`, and the delegated top-level entry spans. It does not
+/// retain or copy PDF bytes, object bodies, stream bodies, key bytes, or value
+/// bytes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IndirectObjectDictionaryInspection {
+    /// Parsed indirect object identifier from the resolved header.
+    pub reference: IndirectRef,
+    /// Byte range covering `object_number generation obj`.
+    pub header_range: IndirectObjectHeaderByteRange,
+    /// Byte offset of the body's opening `<<` after the header and optional
+    /// PDF whitespace.
+    pub dictionary_open_byte_offset: usize,
+    /// Byte offset of the matching closing `>>` for the outermost dictionary.
+    pub dictionary_close_byte_offset: usize,
+    /// Exclusive byte offset immediately after the closing `>>`.
+    pub after_dictionary_close_byte_offset: usize,
+    /// Deepest `<<` nesting depth observed; `1` for a flat object dictionary.
+    pub max_observed_dictionary_depth: usize,
+    /// Top-level `/Name value` entries in source order.
+    pub entries: Vec<DictionaryEntrySpan>,
+}
+
+/// Error returned when an indirect object's top-level dictionary entries cannot
+/// be inspected.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IndirectObjectDictionaryInspectionError {
+    /// Caller-supplied byte offset where indirect object inspection began.
+    pub byte_offset: usize,
+    /// Total source length.
+    pub byte_len: usize,
+    /// Byte offset where the resolved object header begins, when it was located.
+    pub header_byte_offset: Option<usize>,
+    /// Byte offset where the malformed or unsupported construct was found, when
+    /// available.
+    pub error_byte_offset: Option<usize>,
+    /// Structured failure reason.
+    pub reason: IndirectObjectDictionaryInspectionRejection,
+}
+
+/// Structured indirect object dictionary inspection rejection reasons.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "reason", rename_all = "snake_case")]
+pub enum IndirectObjectDictionaryInspectionRejection {
+    /// A delegated indirect object header inspection failed.
+    Header {
+        /// Underlying header inspection rejection reason.
+        header_reason: IndirectObjectHeaderInspectionRejection,
+    },
+    /// A delegated indirect object body leading-token classification failed.
+    BodyToken {
+        /// Underlying body token inspection rejection reason.
+        body_token_reason: IndirectObjectBodyTokenInspectionRejection,
+    },
+    /// The object body's leading token is not a dictionary open (`<<`).
+    NonDictionaryBody {
+        /// Classified leading token family that was not a dictionary open.
+        token_kind: IndirectObjectBodyLeadingTokenKind,
+    },
+    /// A delegated top-level dictionary entry inspection failed.
+    DictionaryEntries {
+        /// Underlying dictionary entry rejection reason.
+        dictionary_entries_reason: DictionaryEntryInspectionRejection,
+    },
+}
+
+/// Inspect an indirect object's top-level dictionary entry spans.
+///
+/// The helper composes existing bounded inspectors: it resolves the object
+/// header with [`crate::inspect_indirect_object_header`], classifies the body's
+/// leading token with [`crate::inspect_indirect_object_body_token`], requires
+/// that token to be the dictionary-open `<<`, and scans the top-level
+/// `/Name value` spans with [`crate::inspect_dictionary_entries`].
+///
+/// It is the object-level sibling of
+/// [`crate::inspect_classic_xref_trailer_dictionary`]: where that helper bridges
+/// a `trailer` keyword to a dictionary, this one bridges an `N G obj` header to
+/// a dictionary-bodied object's top-level entries.
+///
+/// The report carries only the resolved header byte range, the parsed
+/// `IndirectRef`, the dictionary open/close/after offsets, the maximum observed
+/// dictionary nesting depth, and the delegated entry-span list. It interprets no
+/// keys such as `/Type`, `/Pages`, or `/Contents`, resolves no indirect
+/// references found in values, decodes no name escapes or key/value bytes, and
+/// never retains or copies PDF bytes.
+///
+/// # Errors
+///
+/// Returns [`IndirectObjectDictionaryInspectionError`] for a delegated header
+/// inspection failure, a delegated body-token classification failure (including
+/// offsets at or beyond EOF surfaced by that helper), a non-dictionary body
+/// leading token, or a delegated dictionary-entry inspection failure.
+pub fn inspect_indirect_object_dictionary(
+    input: &[u8],
+    object_offset: usize,
+) -> Result<IndirectObjectDictionaryInspection, IndirectObjectDictionaryInspectionError> {
+    let header = crate::inspect_indirect_object_header(input, object_offset).map_err(|error| {
+        object_dictionary_error(
+            input,
+            object_offset,
+            None,
+            IndirectObjectDictionaryInspectionRejection::Header {
+                header_reason: error.reason,
+            },
+            error.error_byte_offset,
+        )
+    })?;
+
+    let body_token =
+        crate::inspect_indirect_object_body_token(input, header.after_obj_keyword_offset).map_err(
+            |error| {
+                object_dictionary_error(
+                    input,
+                    object_offset,
+                    Some(header.header_byte_offset),
+                    IndirectObjectDictionaryInspectionRejection::BodyToken {
+                        body_token_reason: error.reason,
+                    },
+                    error.error_byte_offset,
+                )
+            },
+        )?;
+
+    if body_token.token_kind != IndirectObjectBodyLeadingTokenKind::DictionaryOpen {
+        return Err(object_dictionary_error(
+            input,
+            object_offset,
+            Some(header.header_byte_offset),
+            IndirectObjectDictionaryInspectionRejection::NonDictionaryBody {
+                token_kind: body_token.token_kind,
+            },
+            Some(body_token.first_token_byte_offset),
+        ));
+    }
+
+    let entries = crate::inspect_dictionary_entries(input, body_token.first_token_byte_offset)
+        .map_err(|error| {
+            object_dictionary_error(
+                input,
+                object_offset,
+                Some(header.header_byte_offset),
+                IndirectObjectDictionaryInspectionRejection::DictionaryEntries {
+                    dictionary_entries_reason: error.reason,
+                },
+                error.error_byte_offset,
+            )
+        })?;
+
+    Ok(IndirectObjectDictionaryInspection {
+        reference: header.reference,
+        header_range: header.header_range,
+        dictionary_open_byte_offset: entries.dictionary.open_byte_offset,
+        dictionary_close_byte_offset: entries.dictionary.close_byte_offset,
+        after_dictionary_close_byte_offset: entries.dictionary.after_close_byte_offset,
+        max_observed_dictionary_depth: entries.dictionary.max_observed_depth,
+        entries: entries.entries,
+    })
+}
+
+const fn object_dictionary_error(
+    input: &[u8],
+    byte_offset: usize,
+    header_byte_offset: Option<usize>,
+    reason: IndirectObjectDictionaryInspectionRejection,
+    error_byte_offset: Option<usize>,
+) -> IndirectObjectDictionaryInspectionError {
+    IndirectObjectDictionaryInspectionError {
+        byte_offset,
+        byte_len: input.len(),
+        header_byte_offset,
+        error_byte_offset,
+        reason,
+    }
+}

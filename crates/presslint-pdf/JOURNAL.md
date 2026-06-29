@@ -163,6 +163,36 @@
   missing `/Root`, duplicate exact `/Root` keys, direct non-reference values
   such as dictionaries/names/numbers, and malformed scalar reference attempts
   such as `1 0 obj`.
+- Adds `inspect_indirect_object_dictionary`, a focused composition helper for
+  caller-provided bytes and an indirect object byte offset (typically a
+  `ClassicXrefObjectLocation::InUse` offset). It is the object-level sibling of
+  `inspect_classic_xref_trailer_dictionary`: where that helper bridges a
+  `trailer` keyword to a dictionary, this one bridges an `N G obj` header to a
+  dictionary-bodied object's top-level entries. It composes existing bounded
+  inspectors only: it resolves the header with `inspect_indirect_object_header`,
+  classifies the body's leading token with `inspect_indirect_object_body_token`,
+  requires that token to be the dictionary-open `<<`, then scans top-level
+  `/Name value` spans with `inspect_dictionary_entries` at the reported
+  first-token offset. The report carries the resolved header byte range and
+  parsed `IndirectRef`, the dictionary open/close/after offsets, the maximum
+  observed dictionary nesting depth, and the delegated `Vec<DictionaryEntrySpan>`;
+  it retains or copies no PDF bytes, object bodies, stream bodies, key bytes, or
+  value bytes (keys and values stay addressed by range). Structured public
+  rejections distinguish a delegated header-inspection failure (`Header`), a
+  delegated body-token classification failure including offsets at or beyond EOF
+  surfaced by that helper (`BodyToken`), a non-dictionary body leading token such
+  as an array/name/number/string/boolean/null (`NonDictionaryBody` carrying the
+  classified `IndirectObjectBodyLeadingTokenKind`), and a delegated
+  dictionary-entry inspection failure (`DictionaryEntries`). It interprets no
+  keys such as `/Type`, `/Pages`, `/Kids`, `/Count`, or `/Contents`, resolves no
+  indirect references found in values, decodes no name escapes or key/value
+  bytes, and locates no `stream`/`endstream`/`endobj`/`/Length` or object body
+  end beyond the dictionary extent. It lives in its own `object_dictionary.rs`
+  module. A composition test chains `inspect_classic_xref_table ->
+  resolve_classic_xref_object -> inspect_indirect_object_dictionary` over
+  synthetic classic-xref bytes, locating a catalog-shaped object and a page-tree
+  root object and reporting their top-level entry keys (`/Type`, `/Pages`,
+  `/Kids`, `/Count`) as spans without copying their bytes.
 - Promotes the shared `parse_u64_decimal` decimal parser into `source_utils` so
   the indirect-reference and object-header helpers reuse one bounded
   decimal-to-`u64` routine instead of duplicating it.

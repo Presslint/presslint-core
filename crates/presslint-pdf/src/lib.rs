@@ -15,6 +15,7 @@ mod dictionary_entries;
 mod dictionary_extent;
 mod indirect_reference;
 mod object_body;
+mod object_dictionary;
 mod object_header;
 mod source;
 mod source_utils;
@@ -49,6 +50,10 @@ pub use object_body::{
     IndirectObjectBodyLeadingTokenKind, IndirectObjectBodyTokenInspection,
     IndirectObjectBodyTokenInspectionError, IndirectObjectBodyTokenInspectionRejection,
     inspect_indirect_object_body_token,
+};
+pub use object_dictionary::{
+    IndirectObjectDictionaryInspection, IndirectObjectDictionaryInspectionError,
+    IndirectObjectDictionaryInspectionRejection, inspect_indirect_object_dictionary,
 };
 pub use object_header::{
     IndirectObjectHeaderByteRange, IndirectObjectHeaderInspection,
