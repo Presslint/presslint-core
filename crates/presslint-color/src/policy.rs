@@ -47,6 +47,17 @@ pub struct TransformRequest {
     pub policy: ColorPolicy,
 }
 
+/// Report-only planning request for one abstract color transform.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TransformPlanRequest {
+    /// Abstract color transform to plan.
+    pub transform: TransformRequest,
+    /// `DeviceLink` selection policy for the transform.
+    pub device_link: DeviceLinkPolicy,
+    /// Document-level output-intent policy for the transform plan.
+    pub output_intent: OutputIntentPolicy,
+}
+
 /// `DeviceLink` usage policy for a transform request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

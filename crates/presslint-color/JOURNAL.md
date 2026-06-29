@@ -84,6 +84,19 @@
   simulation, no transparency flattening, no color transform, no PDF byte
   mutation. Combined resolution and shape tests live in
   `src/tests/color_policy.rs`.
+- Adds a report-only transform planning contract: `TransformPlanRequest`,
+  `TransformPlanDecision`, and `resolve_transform_plan`. The request combines an
+  existing `TransformRequest`, `DeviceLinkPolicy`, and `OutputIntentPolicy`; the
+  decision carries the resolved `DeviceLinkDecision`, `OutputIntentDecision`, and
+  `ColorPolicyDecision` without adding a new top-level rejection policy. The
+  helper is a thin aggregator that delegates directly to
+  `resolve_device_link_policy`, `resolve_output_intent_policy`, and
+  `resolve_color_policy` for the same inputs, so caller iteration order and all
+  focused resolver behavior are preserved unchanged. It remains report-only: no
+  ICC parsing, PDF catalog inspection, graphics-state inspection, color
+  transform execution, output-intent insertion, or PDF byte mutation. Focused
+  delegation and serde shape tests live in `src/tests/transform_plan.rs`, with
+  the request shape locked in `src/tests.rs`.
 - Focused serde shape tests lock the public JSON encoding of `ColorPolicy`,
   `SpotPolicy`, `OverprintPolicy`, `TransformRequest`, and the output-intent
   contracts plus the DeviceLink selection, spot-resolution, and

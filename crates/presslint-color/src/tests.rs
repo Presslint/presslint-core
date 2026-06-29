@@ -5,6 +5,7 @@ mod devicelink;
 mod json;
 mod overprint;
 mod spot;
+mod transform_plan;
 
 use std::fmt;
 
@@ -15,8 +16,8 @@ use self::json::{Json, JsonSerializer};
 use super::{
     ColorPolicy, NamedOutputCondition, ObservedOutputIntent, OutputIntentDecision,
     OutputIntentPolicy, OutputIntentRejection, OutputIntentSubtype, OutputIntentTarget,
-    OutputProfileSource, OverprintPolicy, ProfileBackedOutputIntent, SpotPolicy, TransformRequest,
-    resolve_output_intent_policy,
+    OutputProfileSource, OverprintPolicy, ProfileBackedOutputIntent, SpotPolicy,
+    TransformPlanRequest, TransformRequest, resolve_output_intent_policy,
 };
 
 fn assert_json_round_trip<T>(value: &T, expected: Json)
@@ -90,6 +91,45 @@ fn transform_request_has_stable_json_shape() {
                 )]),
             ),
             ("policy", color_policy_json()),
+        ]),
+    );
+}
+
+#[test]
+fn transform_plan_request_has_stable_json_shape() {
+    assert_json_round_trip(
+        &TransformPlanRequest {
+            transform: TransformRequest {
+                source: ColorSpace::DeviceRgb,
+                destination: ColorSpace::DeviceCmyk,
+                policy: color_policy(),
+            },
+            device_link: super::DeviceLinkPolicy::Prefer,
+            output_intent: ensure_named_fogra51(),
+        },
+        Json::object([
+            (
+                "transform",
+                Json::object([
+                    ("source", Json::string("device_rgb")),
+                    ("destination", Json::string("device_cmyk")),
+                    ("policy", color_policy_json()),
+                ]),
+            ),
+            ("device_link", Json::string("prefer")),
+            (
+                "output_intent",
+                Json::object([
+                    ("policy", Json::string("ensure_target")),
+                    (
+                        "target",
+                        Json::object([
+                            ("kind", Json::string("named_condition")),
+                            ("condition", named_condition_json()),
+                        ]),
+                    ),
+                ]),
+            ),
         ]),
     );
 }
@@ -206,9 +246,13 @@ fn output_profile_source_variants_have_stable_json_shape() {
 }
 
 fn named_condition() -> NamedOutputCondition {
+    named_condition_with_identifier("FOGRA51")
+}
+
+fn named_condition_with_identifier(identifier: &str) -> NamedOutputCondition {
     NamedOutputCondition {
         subtype: OutputIntentSubtype::GtsPdfx,
-        output_condition_identifier: "FOGRA51".to_owned(),
+        output_condition_identifier: identifier.to_owned(),
         registry_name: "http://www.color.org".to_owned(),
     }
 }

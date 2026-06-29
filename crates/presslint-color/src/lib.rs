@@ -8,6 +8,7 @@ mod output_intent;
 mod overprint;
 mod policy;
 mod spot;
+mod transform_plan;
 
 #[cfg(test)]
 mod tests;
@@ -27,9 +28,10 @@ pub use overprint::{
 pub use policy::{
     ColorPolicy, DeviceLinkPolicy, NamedOutputCondition, OutputIntentPolicy, OutputIntentSubtype,
     OutputIntentTarget, OutputProfileSource, OverprintPolicy, ProfileBackedOutputIntent,
-    SpotPolicy, TransformRequest,
+    SpotPolicy, TransformPlanRequest, TransformRequest,
 };
 pub use spot::{
     ObservedSpotColor, SkippedSpotConversion, SpotDecision, SpotRejection, SpotSkipReason,
     resolve_spot_policy,
 };
+pub use transform_plan::{TransformPlanDecision, resolve_transform_plan};
