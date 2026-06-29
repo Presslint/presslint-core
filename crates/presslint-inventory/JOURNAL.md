@@ -81,6 +81,10 @@
   bounds, color observations, color spaces/usages, object kinds, and edit
   capabilities. The fixture includes bounded vector output, sourced color
   provenance, and a read-only form-style entry with empty colors.
+- Criterion benchmark target `inventory` covers graphics-state walking
+  throughput in operator records/events and combined inventory-building
+  throughput in emitted inventory entries over small and repeated synthetic
+  public content streams.
 
 ## Follow-Ups
 

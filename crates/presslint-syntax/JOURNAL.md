@@ -12,6 +12,9 @@
 - Operator assembler groups top-level operands with operator records while
   preserving token references and source ranges.
 - Assembly errors are structured for malformed operand/operator ordering.
+- Criterion benchmark target `syntax` covers tokenize throughput in bytes,
+  assemble throughput in token records, and unmodified serialization throughput
+  over small and repeated synthetic public content streams.
 - Tests are split into focused model, tokenizer, serializer, and assembler
   modules.
 

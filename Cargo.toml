@@ -31,6 +31,7 @@ presslint-actions = { path = "crates/presslint-actions", version = "0.0.1" }
 presslint-color = { path = "crates/presslint-color", version = "0.0.1" }
 
 serde = { version = "1", features = ["derive"] }
+criterion = { version = "0.5", default-features = false }
 
 [workspace.lints.rust]
 unsafe_code = "warn"
@@ -45,4 +46,3 @@ panic = "warn"
 todo = "warn"
 unimplemented = "warn"
 module_name_repetitions = "allow"
-
