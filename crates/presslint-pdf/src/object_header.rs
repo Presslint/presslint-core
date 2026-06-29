@@ -1,8 +1,10 @@
 use serde::{Deserialize, Serialize};
 
 use crate::IndirectRef;
+use crate::source_utils::{consume_keyword, count_leading_digits, skip_whitespace};
 
 const INDIRECT_OBJECT_HEADER_SCAN_LIMIT: usize = 128;
+const OBJ_KEYWORD: &[u8] = b"obj";
 
 /// Source byte range covering an indirect object header.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -134,7 +136,7 @@ pub fn inspect_indirect_object_header(
         + generation_digits
         + generation_keyword_gap;
     let keyword_content = &after_generation[generation_keyword_gap..];
-    if !consume_obj_keyword(keyword_content) {
+    if consume_keyword(keyword_content, OBJ_KEYWORD).is_none() {
         return Err(malformed_object_header_error(
             input,
             byte_offset,
@@ -218,13 +220,6 @@ const fn malformed_object_header_error(
     )
 }
 
-fn count_leading_digits(bytes: &[u8]) -> usize {
-    bytes
-        .iter()
-        .take_while(|byte| byte.is_ascii_digit())
-        .count()
-}
-
 fn parse_u64_decimal(bytes: &[u8]) -> Option<u64> {
     let mut value = 0u64;
     for byte in bytes {
@@ -232,35 +227,4 @@ fn parse_u64_decimal(bytes: &[u8]) -> Option<u64> {
         value = value.checked_mul(10)?.checked_add(digit)?;
     }
     Some(value)
-}
-
-fn consume_obj_keyword(bytes: &[u8]) -> bool {
-    let Some(after_keyword) = bytes.strip_prefix(b"obj") else {
-        return false;
-    };
-    if after_keyword
-        .first()
-        .is_some_and(|byte| !is_pdf_whitespace(*byte) && !is_pdf_delimiter(*byte))
-    {
-        return false;
-    }
-    true
-}
-
-fn skip_whitespace(bytes: &[u8]) -> usize {
-    bytes
-        .iter()
-        .position(|byte| !is_pdf_whitespace(*byte))
-        .unwrap_or(bytes.len())
-}
-
-const fn is_pdf_whitespace(byte: u8) -> bool {
-    matches!(byte, b'\0' | b'\t' | b'\n' | b'\x0c' | b'\r' | b' ')
-}
-
-const fn is_pdf_delimiter(byte: u8) -> bool {
-    matches!(
-        byte,
-        b'(' | b')' | b'<' | b'>' | b'[' | b']' | b'{' | b'}' | b'/' | b'%'
-    )
 }

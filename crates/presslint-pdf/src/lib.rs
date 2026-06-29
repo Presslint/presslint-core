@@ -9,13 +9,18 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
+mod classic_xref;
 mod object_header;
 mod source;
+mod source_utils;
+mod startxref;
 mod xref_resolve;
+mod xref_section;
 
 #[cfg(test)]
 mod tests;
 
+pub use classic_xref::inspect_classic_xref_table;
 pub use object_header::{
     IndirectObjectHeaderByteRange, IndirectObjectHeaderInspection,
     IndirectObjectHeaderInspectionError, IndirectObjectHeaderInspectionRejection,
@@ -25,7 +30,7 @@ pub use source::{
     PDF_HEADER_SCAN_LIMIT, PdfHeader, PdfSourceDiagnostic, PdfSourceInspection,
     PdfSourceInspectionError, PdfSourceRejection, PdfStartXref, PdfStartXrefIssue, PdfVersion,
     PdfXrefSectionIssue, STARTXREF_SCAN_LIMIT, XREF_SECTION_SCAN_LIMIT, XrefSection,
-    inspect_classic_xref_table, inspect_pdf_source,
+    inspect_pdf_source,
 };
 pub use xref_resolve::{
     ClassicXrefAmbiguousObjectEntry, ClassicXrefObjectLocation, resolve_classic_xref_object,

@@ -52,6 +52,14 @@
 - The only owned allocations introduced by classic table inspection are the
   public report vectors for subsection and entry metadata; no PDF bytes, object
   bodies, stream bodies, or trailer dictionary bytes are copied into reports.
+- Splits source inspection internals into focused modules for bounded source
+  orchestration, final `startxref` inspection, xref-section classification,
+  classic xref table inspection, and shared byte-scanning helpers. Public
+  crate-root re-exports and report/error shapes remain unchanged.
+- Reuses the shared byte-scanning helpers for indirect-object header inspection
+  so whitespace, digit, and keyword boundary rules stay in one internal module.
+- Moves source and classic xref table regression coverage into focused
+  `src/tests/source.rs` and `src/tests/classic_xref.rs` modules.
 - Adds a Criterion benchmark target, `pdf_source`, covering synthetic classic
   xref table inspection throughput.
 - Models indirect-object edit ownership as proven single-use, shared, or
