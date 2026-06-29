@@ -18,8 +18,97 @@ pub use source::{
     PDF_HEADER_SCAN_LIMIT, PdfHeader, PdfSourceDiagnostic, PdfSourceInspection,
     PdfSourceInspectionError, PdfSourceRejection, PdfStartXref, PdfStartXrefIssue, PdfVersion,
     PdfXrefSectionIssue, STARTXREF_SCAN_LIMIT, XREF_SECTION_SCAN_LIMIT, XrefSection,
-    inspect_pdf_source,
+    inspect_classic_xref_table, inspect_pdf_source,
 };
+
+/// Parsed metadata for a classic cross-reference table.
+///
+/// This report stores only structural table metadata. It does not retain or
+/// copy PDF bytes, object bodies, stream bodies, or trailer dictionary bytes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClassicXrefTableInspection {
+    /// Byte offset where the `xref` keyword begins.
+    pub table_byte_offset: usize,
+    /// Parsed table subsections in source order.
+    pub subsections: Vec<ClassicXrefSubsection>,
+    /// Byte offset where the following `trailer` keyword begins.
+    pub trailer_byte_offset: usize,
+}
+
+/// Parsed metadata for one classic cross-reference table subsection.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClassicXrefSubsection {
+    /// First object number covered by this subsection.
+    pub first_object_number: u32,
+    /// Number of entries declared by the subsection header.
+    pub entry_count: u32,
+    /// Fixed-width entries, ordered by object number within this subsection.
+    pub entries: Vec<ClassicXrefEntry>,
+}
+
+/// Parsed metadata for one classic cross-reference table entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClassicXrefEntry {
+    /// Object number assigned by the enclosing subsection and entry position.
+    pub object_number: u32,
+    /// Generation number from the fixed-width xref entry.
+    pub generation: u16,
+    /// Byte offset field from the fixed-width xref entry.
+    pub byte_offset: usize,
+    /// Free or in-use entry state.
+    pub state: ClassicXrefEntryState,
+}
+
+/// State marker from a classic cross-reference table entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClassicXrefEntryState {
+    /// Free entry (`f`).
+    Free,
+    /// In-use entry (`n`).
+    InUse,
+}
+
+/// Error returned when a classic cross-reference table cannot be inspected.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClassicXrefTableInspectionError {
+    /// Caller-supplied byte offset where inspection began.
+    pub byte_offset: usize,
+    /// Total source length.
+    pub byte_len: usize,
+    /// Byte offset where the malformed construct was found, when available.
+    pub error_byte_offset: Option<usize>,
+    /// Object number associated with an entry-level error, when available.
+    pub object_number: Option<u32>,
+    /// Structured failure reason.
+    pub reason: ClassicXrefTableInspectionRejection,
+}
+
+/// Structured classic cross-reference table inspection rejection reasons.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "reason", rename_all = "snake_case")]
+pub enum ClassicXrefTableInspectionRejection {
+    /// The caller-supplied offset lies beyond the source length.
+    OffsetOutOfBounds,
+    /// The offset does not point at a classic `xref` table.
+    NotXrefTable,
+    /// A subsection header was present but not shaped as `first count`.
+    MalformedSubsectionHeader,
+    /// A subsection header object number does not fit `u32`.
+    SubsectionObjectNumberOutOfRange,
+    /// A subsection header entry count does not fit `u32`.
+    SubsectionEntryCountOutOfRange,
+    /// The subsection range cannot be represented as `u32` object numbers.
+    SubsectionObjectRangeOutOfRange,
+    /// An entry line is missing or malformed.
+    MalformedEntry,
+    /// An entry generation number does not fit `u16`.
+    EntryGenerationOutOfRange,
+    /// An entry byte offset does not fit `usize`.
+    EntryByteOffsetOutOfRange,
+    /// No following `trailer` keyword was found.
+    MissingTrailer,
+}
 
 /// PDF indirect reference.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]

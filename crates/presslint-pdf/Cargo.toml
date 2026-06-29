@@ -10,6 +10,12 @@ description = "Structural PDF access interfaces for presslint-core."
 [dependencies]
 serde.workspace = true
 
+[dev-dependencies]
+criterion.workspace = true
+
+[[bench]]
+name = "pdf_source"
+harness = false
+
 [lints]
 workspace = true
-
