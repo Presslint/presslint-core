@@ -2,6 +2,8 @@
 
 ## Current State
 
+- Crate root is a small public facade over focused syntax modules:
+  `model`, `tokenizer`, `assembler`, and `serializer`.
 - Implements source-preserving content-stream tokens with byte ranges.
 - Tokenizer slice covers common lexical tokens, trivia, strings, delimiters,
   names, numbers, booleans, nulls, object/stream keywords, and operators.
@@ -10,6 +12,8 @@
 - Operator assembler groups top-level operands with operator records while
   preserving token references and source ranges.
 - Assembly errors are structured for malformed operand/operator ordering.
+- Tests are split into focused model, tokenizer, serializer, and assembler
+  modules.
 
 ## Follow-Ups
 
