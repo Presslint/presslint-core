@@ -80,6 +80,21 @@
   the fixtures exercise.
 - Does not yet include ICC parsing, DeviceLink execution, transform caching, or
   PDF write logic.
+- The crate is split into focused modules mirroring `presslint-inventory` and
+  `presslint-syntax`: `policy.rs` (the shared policy/request input contracts:
+  `ColorPolicy`, `SpotPolicy`, `OverprintPolicy`, the output-intent policy/target
+  contracts, `DeviceLinkPolicy`, `TransformRequest`), `output_intent.rs`
+  (`ObservedOutputIntent`/`OutputIntentRejection`/`OutputIntentDecision`, the
+  private `target_identity` helper, and `resolve_output_intent_policy`), `spot.rs`
+  (the spot-resolution contracts, the private `is_process_device_color_space`
+  helper, and `resolve_spot_policy`), `overprint.rs` (the overprint-resolution
+  contracts and `resolve_overprint_policy`), and `devicelink.rs` (the DeviceLink
+  selection contracts and `resolve_device_link_policy`). `lib.rs` is a small
+  public facade that keeps `#![forbid(unsafe_code)]`, declares the modules, and
+  re-exports every previously-public item, so the public API is source-identical.
+  The split was a mechanical move with no contract, signature, or behavior change;
+  the `target_identity` and `is_process_device_color_space` helpers stay private to
+  their modules.
 
 ## Follow-Ups
 
