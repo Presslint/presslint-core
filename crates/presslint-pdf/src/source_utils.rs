@@ -194,6 +194,33 @@ pub const fn is_pdf_delimiter(byte: u8) -> bool {
     )
 }
 
+pub fn skip_name(input: &[u8], start: usize, limit: usize) -> usize {
+    let mut cursor = start + 1;
+    while cursor < limit && !is_pdf_whitespace(input[cursor]) && !is_pdf_delimiter(input[cursor]) {
+        cursor += 1;
+    }
+    cursor
+}
+
+pub fn skip_scalar_token(input: &[u8], start: usize, limit: usize) -> usize {
+    let mut cursor = start;
+    while cursor < limit && !is_pdf_whitespace(input[cursor]) && !is_pdf_delimiter(input[cursor]) {
+        cursor += 1;
+    }
+    if cursor == start { cursor + 1 } else { cursor }
+}
+
+pub fn skip_whitespace_and_comments(input: &[u8], mut cursor: usize, limit: usize) -> usize {
+    loop {
+        cursor += skip_whitespace(&input[cursor..limit]);
+        if cursor < limit && input[cursor] == b'%' {
+            cursor = skip_comment(input, cursor).min(limit);
+            continue;
+        }
+        return cursor;
+    }
+}
+
 /// Skip a literal string `( ... )` opaque span starting at its opening `(`.
 ///
 /// Returns the exclusive byte offset just past the matching `)`, honoring `\`

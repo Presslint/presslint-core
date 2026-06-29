@@ -250,6 +250,30 @@
   inspect_catalog_pages -> resolve_classic_xref_object -> inspect_page_tree_node`
   over synthetic bytes to bound the `/Kids` array and locate `/Count` without
   scanning array elements.
+- Adds `inspect_page_tree_kids`, a focused composition helper for
+  caller-provided bytes and an already-located page-tree node object byte
+  offset. It delegates node boundary discovery to `inspect_page_tree_node`, then
+  scans only the already-bounded `/Kids` array body between the outer `[` and
+  matching `]` in a single forward pass. Direct top-level `N G R` entries are
+  parsed through the existing `parse_indirect_reference` helper, preserving its
+  keyword-boundary and numeric-range checks. The report carries the delegated
+  `PageTreeNodeInspection`, direct kid `IndirectRef` values with
+  `IndirectReferenceByteRange`s, and shallow skipped-entry diagnostics; it
+  retains or copies no PDF bytes, array bytes, child object bytes, page
+  dictionaries, contents streams, or referenced-object bytes. Nested arrays,
+  dictionaries, literal strings, hex strings, comments, names, numbers,
+  booleans, nulls, and other direct scalar values are not descended into or
+  interpreted as child references. Malformed direct reference-shaped candidates
+  are reported as `SkippedPageTreeKidKind::MalformedIndirectReference` with the
+  delegated `IndirectReferenceInspectionRejection` rather than disappearing or
+  panicking. The only owned allocations are the public report vectors for direct
+  kid references and skipped direct entries; no benchmark was added because this
+  remains a bounded single-array scan rather than a broader traversal.
+- Ablation T073: removes an unreachable `OffsetOutOfBounds` remapping from the
+  page-tree-kids scanner's successful `parse_indirect_reference` branch. The
+  shared indirect-reference parser already bounds successful reports to the
+  input slice, so a parsed reference that extends past the bounded `/Kids` array
+  body remains the existing `MalformedReference` skipped-entry diagnostic.
 - Promotes the shared `parse_u64_decimal` decimal parser into `source_utils` so
   the indirect-reference and object-header helpers reuse one bounded
   decimal-to-`u64` routine instead of duplicating it.
