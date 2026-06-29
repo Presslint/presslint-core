@@ -65,6 +65,13 @@
   The image and form entry helpers share a single `matched_xobject` lookup for
   the `Do`-name classification instead of duplicating the `XObjectInvoke` match
   and name-list check, with no change to the resolved name or any digest.
+- Adds focused dependency-free serde shape tests for `Inventory` and
+  `InventoryEntry`. The locked fixtures round-trip through an in-memory JSON
+  harness and pin the public encoding of nested core inventory-report fields:
+  object IDs, page indexes, provenance, content scopes, byte ranges, PDF names,
+  bounds, color observations, color spaces/usages, object kinds, and edit
+  capabilities. The fixture includes bounded vector output, sourced color
+  provenance, and a read-only form-style entry with empty colors.
 
 ## Follow-Ups
 

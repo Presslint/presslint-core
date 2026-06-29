@@ -4,6 +4,8 @@ use presslint_core::{
 use presslint_syntax::{OperatorRecord, TokenRef, assemble_operators, tokenize};
 
 mod combined;
+mod json;
+mod serde_shape;
 mod xobject;
 
 use super::{
