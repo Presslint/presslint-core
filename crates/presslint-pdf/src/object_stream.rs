@@ -510,12 +510,12 @@ pub fn inspect_indirect_length_content_stream_data_extent(
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum LengthEntryIssue {
+pub enum LengthEntryIssue {
     Missing,
     Duplicate(DictionaryEntryByteRange, DictionaryEntryByteRange),
 }
 
-fn find_length_entry(
+pub fn find_length_entry(
     input: &[u8],
     stream_start: &ContentStreamStartInspection,
 ) -> Result<DictionaryEntrySpan, LengthEntryIssue> {

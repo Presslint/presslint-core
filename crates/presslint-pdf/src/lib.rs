@@ -12,6 +12,7 @@ use std::collections::BTreeSet;
 mod array_extent;
 mod catalog_pages;
 mod classic_xref;
+mod content_stream_extent;
 mod dictionary_entries;
 mod dictionary_extent;
 mod indirect_reference;
@@ -46,6 +47,10 @@ pub use catalog_pages::{
     inspect_catalog_pages,
 };
 pub use classic_xref::inspect_classic_xref_table;
+pub use content_stream_extent::{
+    ContentStreamDataExtentInspection, ContentStreamDataExtentInspectionError,
+    ContentStreamDataExtentInspectionRejection, inspect_content_stream_data_extent,
+};
 pub use dictionary_entries::{
     DictionaryEntryByteRange, DictionaryEntryInspection, DictionaryEntryInspectionError,
     DictionaryEntryInspectionRejection, DictionaryEntrySpan, DictionaryValueKind,

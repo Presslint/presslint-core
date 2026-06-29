@@ -4,6 +4,39 @@
 
 - Defines initial structural PDF access data contracts for indirect references
   and document info.
+- Adds `inspect_content_stream_data_extent`, a focused public aggregator for
+  dictionary-bodied content stream objects whose top-level `/Length` is either
+  a direct non-negative integer or a classic-xref indirect reference. It first
+  uses `inspect_content_stream_start`, selects exactly one exact raw
+  top-level `/Length` entry through the shared entry-selection helper, dispatches
+  on the entry's `DictionaryValueKind`, and then delegates validation to
+  `inspect_direct_length_content_stream_data_extent` for `NumberLike` values or
+  to `inspect_indirect_length_content_stream_data_extent` for
+  `IndirectReferenceLike` values when a `ClassicXrefTableInspection` is supplied.
+  Success is the `ContentStreamDataExtentInspection` enum carrying the focused
+  direct or indirect report plus common `length`,
+  `stream_data_start_byte_offset`, and `stream_data_end_byte_offset` accessors.
+- Combined content-stream extent inspection has dispatch-level structured
+  rejections for stream-start failures, missing and duplicate exact `/Length`
+  entries, `IndirectLengthRequiresXrefTable`, and
+  `UnsupportedLengthValueKind` carrying the observed `DictionaryValueKind`.
+  Delegated direct and indirect failures are surfaced through dedicated
+  `DirectLength` and `IndirectLength` channels that preserve the focused
+  helper's underlying rejection reason. For a valid direct or indirect input,
+  the enum payload is byte-for-byte the same focused-helper report that callers
+  would receive by invoking the matching helper directly.
+- The combined helper does no `/Length` parsing, indirect resolution,
+  checked data-end arithmetic, `endstream` validation, fallback scanning,
+  stream-byte reading, decoding, decompression, concatenation, content
+  tokenization, filter validation, page semantics, selector/action planning, or
+  mutation itself. The focused public helper selected by dispatch remains
+  authoritative for those extent checks. This implementation inspects stream
+  start once for dispatch and the selected focused helper inspects stream start
+  again while producing its canonical report; no private shortcut was added that
+  would bypass the public focused helpers. The new report and rejections retain
+  no stream bytes, decoded bytes, object bodies, dictionaries, source slices, or
+  copied PDF payloads; owned data is limited to fixed-size enum/report metadata
+  already present in the delegated reports.
 - Adds `inspect_direct_length_content_stream_data_extent`, a public,
   report-only helper for dictionary-bodied content stream objects whose
   top-level `/Length` value is a direct non-negative integer. It composes
