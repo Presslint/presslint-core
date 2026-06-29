@@ -64,6 +64,26 @@
   in both lists. The helper is pure: no graphics-state or ExtGState inspection,
   no overprint simulation, no transparency flattening, no color transform, no
   PDF byte mutation.
+- Adds a combined color-policy resolution contract: `ColorPolicyDecision` and
+  `resolve_color_policy`. The helper resolves a whole `ColorPolicy` (its `spot`
+  and `overprint` members) against caller-supplied, PDF-free spot and overprint
+  observations in one call and returns a serde-stable `ColorPolicyDecision`
+  carrying the resolved `spot: SpotDecision` and `overprint: OverprintDecision`.
+  It is a thin aggregator that delegates to the existing `resolve_spot_policy`
+  and `resolve_overprint_policy`, reimplementing no spot or overprint logic: its
+  `spot` field equals `resolve_spot_policy(policy.spot, spot_observed)` and its
+  `overprint` field equals `resolve_overprint_policy(policy.overprint,
+  overprint_observed)` for the same inputs, so caller iteration order is
+  preserved unchanged in every nested list. `ColorPolicy.spot`/`overprint` are
+  `Copy`, so the helper reads `&ColorPolicy` without cloning. This mirrors the
+  combined page-object inventory builder: keep the focused sub-resolvers
+  authoritative, then add a delegating aggregator for the whole policy. It lives
+  in `color_policy.rs`, re-exported from the crate root next to the other
+  resolvers. The helper is pure: no PDF catalog inspection, no graphics-state or
+  ExtGState reading, no ICC parsing, no tint-transform evaluation, no overprint
+  simulation, no transparency flattening, no color transform, no PDF byte
+  mutation. Combined resolution and shape tests live in
+  `src/tests/color_policy.rs`.
 - Focused serde shape tests lock the public JSON encoding of `ColorPolicy`,
   `SpotPolicy`, `OverprintPolicy`, `TransformRequest`, and the output-intent
   contracts plus the DeviceLink selection, spot-resolution, and

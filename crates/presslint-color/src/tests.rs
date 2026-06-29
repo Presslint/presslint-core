@@ -1,5 +1,6 @@
 #![allow(clippy::expect_used, clippy::missing_errors_doc)]
 
+mod color_policy;
 mod devicelink;
 mod json;
 mod overprint;

@@ -2,6 +2,7 @@
 
 #![forbid(unsafe_code)]
 
+mod color_policy;
 mod devicelink;
 mod output_intent;
 mod overprint;
@@ -11,6 +12,7 @@ mod spot;
 #[cfg(test)]
 mod tests;
 
+pub use color_policy::{ColorPolicyDecision, resolve_color_policy};
 pub use devicelink::{
     DeviceLinkDecision, DeviceLinkDescription, DeviceLinkRejection, resolve_device_link_policy,
 };
