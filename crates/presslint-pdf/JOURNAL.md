@@ -122,6 +122,45 @@
   returns structured public errors for malformed non-name top-level keys,
   missing values, delegated dictionary/array extent failures, and unterminated
   string spans.
+- Adds `parse_indirect_reference`, a bounded report-only helper for
+  caller-provided bytes and a byte offset that begins an `N G R` indirect
+  reference (typically the `value_range.start` of a `DictionaryEntrySpan`
+  classified as `IndirectReferenceLike`). It skips optional PDF whitespace over
+  a fixed leading window (`INDIRECT_REFERENCE_SCAN_LIMIT`), parses
+  `object-number generation R`, and reports the parsed `IndirectRef`, the
+  resolved reference start, the byte range through the `R` keyword, and the byte
+  immediately after `R`. It is the direct sibling of
+  `inspect_indirect_object_header`: same `N G <keyword>` discipline, but the
+  keyword is `R`, validated with the shared keyword-boundary rule
+  (`consume_keyword`) so `Robot` or `R0` is not accepted and an `N G obj` header
+  (or any other trailing keyword) is rejected as malformed rather than parsed as
+  a reference. It validates public numeric ranges and returns structured errors
+  for offsets at or beyond EOF (`OffsetOutOfBounds`), malformed `N G R` shape
+  (`MalformedReference`), an object number that does not fit `u32`
+  (`ObjectNumberOutOfRange`), and a generation that does not fit `u16`
+  (`GenerationOutOfRange`), mirroring the header helper's rejection style. It
+  retains or copies no PDF bytes, allocates nothing beyond the fixed-size public
+  report, and does not resolve or follow the reference, inspect the referenced
+  object's header or body, or read any dictionary, array, stream, trailer, or
+  `/Prev` chain. It lives in its own `indirect_reference.rs` module. A
+  composition test chains `inspect_classic_xref_table ->
+  inspect_classic_xref_trailer_dictionary -> inspect_dictionary_entries ->
+  parse_indirect_reference` over synthetic classic-xref bytes, parsing the
+  `/Root` entry's `IndirectReferenceLike` value span into an `IndirectRef` and
+  feeding its object number to `resolve_classic_xref_object` to locate the
+  catalog object's byte offset without inspecting the catalog body.
+- Promotes the shared `parse_u64_decimal` decimal parser into `source_utils` so
+  the indirect-reference and object-header helpers reuse one bounded
+  decimal-to-`u64` routine instead of duplicating it.
+- Ablation: factors the identical `N G <keyword>` scan shared by
+  `inspect_indirect_object_header` and `parse_indirect_reference` into a single
+  internal `parse_object_reference_shape` helper in `source_utils` (parametrized
+  by scan window and trailing keyword). Each public helper now only maps the
+  shared `ObjectReferenceShape`/rejection into its own report and error types, so
+  the bounded single-pass scan, whitespace/digit/keyword-boundary discipline, and
+  numeric-range checks live in one place instead of two near-verbatim copies.
+  Behavior, public types, field names, serde shapes, and error offsets are
+  unchanged; this only removes duplication.
 - Shares literal-string, hex-string, and `%`-comment opaque-span skip helpers
   through the internal `source_utils` module so the string/comment scanning
   rules live in one place alongside the existing whitespace/delimiter helpers.

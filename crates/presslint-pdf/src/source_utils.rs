@@ -14,6 +14,134 @@ pub fn parse_usize_decimal(bytes: &[u8]) -> Option<usize> {
     Some(value)
 }
 
+pub fn parse_u64_decimal(bytes: &[u8]) -> Option<u64> {
+    let mut value = 0u64;
+    for byte in bytes {
+        let digit = u64::from(byte - b'0');
+        value = value.checked_mul(10)?.checked_add(digit)?;
+    }
+    Some(value)
+}
+
+/// Components of an `N G <keyword>` shape parsed at a caller-supplied offset.
+///
+/// Shared by the indirect-object-header and indirect-reference helpers, which
+/// differ only in the trailing keyword (`obj` vs `R`), the scan window size, and
+/// the public report/error types they wrap these components in.
+pub struct ObjectReferenceShape {
+    pub object_number: u32,
+    pub generation: u16,
+    /// Offset where the shape begins after optional leading PDF whitespace.
+    pub reference_byte_offset: usize,
+    /// Offset immediately after the trailing keyword.
+    pub after_keyword_offset: usize,
+}
+
+/// Reason an `N G <keyword>` shape parse failed.
+pub enum ObjectReferenceShapeRejection {
+    OffsetOutOfBounds,
+    Malformed,
+    ObjectNumberOutOfRange,
+    GenerationOutOfRange,
+}
+
+/// Failure of [`parse_object_reference_shape`], carrying the offset of the
+/// malformed construct when one is known.
+pub struct ObjectReferenceShapeError {
+    pub error_byte_offset: Option<usize>,
+    pub reason: ObjectReferenceShapeRejection,
+}
+
+/// Parse an `object-number generation keyword` shape at `byte_offset`.
+///
+/// Skips optional leading PDF whitespace, bounds the scan to a fixed
+/// `scan_limit` leading window, and validates the trailing `keyword` with the
+/// shared keyword-boundary rule so trailing bytes (e.g. `Robot`) are rejected.
+/// It retains no input bytes and reports only the parsed numbers and structural
+/// offsets.
+pub fn parse_object_reference_shape(
+    input: &[u8],
+    byte_offset: usize,
+    scan_limit: usize,
+    keyword: &[u8],
+) -> Result<ObjectReferenceShape, ObjectReferenceShapeError> {
+    if byte_offset >= input.len() {
+        return Err(ObjectReferenceShapeError {
+            error_byte_offset: None,
+            reason: ObjectReferenceShapeRejection::OffsetOutOfBounds,
+        });
+    }
+
+    let window_end = byte_offset.saturating_add(scan_limit).min(input.len());
+    let window = &input[byte_offset..window_end];
+    let leading_whitespace = skip_whitespace(window);
+    let reference_byte_offset = byte_offset + leading_whitespace;
+    let content = &window[leading_whitespace..];
+
+    let object_digits = count_leading_digits(content);
+    if object_digits == 0 {
+        return Err(malformed_shape(reference_byte_offset));
+    }
+    let after_object = &content[object_digits..];
+
+    let object_generation_gap = skip_whitespace(after_object);
+    if object_generation_gap == 0 {
+        return Err(malformed_shape(reference_byte_offset));
+    }
+    let generation_field = &after_object[object_generation_gap..];
+
+    let generation_digits = count_leading_digits(generation_field);
+    if generation_digits == 0 {
+        return Err(malformed_shape(
+            reference_byte_offset + object_digits + object_generation_gap,
+        ));
+    }
+    let after_generation = &generation_field[generation_digits..];
+
+    let generation_keyword_gap = skip_whitespace(after_generation);
+    if generation_keyword_gap == 0 {
+        return Err(malformed_shape(
+            reference_byte_offset + object_digits + object_generation_gap + generation_digits,
+        ));
+    }
+    let keyword_offset = reference_byte_offset
+        + object_digits
+        + object_generation_gap
+        + generation_digits
+        + generation_keyword_gap;
+    let keyword_content = &after_generation[generation_keyword_gap..];
+    if consume_keyword(keyword_content, keyword).is_none() {
+        return Err(malformed_shape(keyword_offset));
+    }
+
+    let object_number = parse_u64_decimal(&content[..object_digits])
+        .and_then(|value| u32::try_from(value).ok())
+        .ok_or(ObjectReferenceShapeError {
+            error_byte_offset: Some(reference_byte_offset),
+            reason: ObjectReferenceShapeRejection::ObjectNumberOutOfRange,
+        })?;
+    let generation = parse_u64_decimal(&generation_field[..generation_digits])
+        .and_then(|value| u16::try_from(value).ok())
+        .ok_or(ObjectReferenceShapeError {
+            error_byte_offset: Some(reference_byte_offset + object_digits + object_generation_gap),
+            reason: ObjectReferenceShapeRejection::GenerationOutOfRange,
+        })?;
+
+    Ok(ObjectReferenceShape {
+        object_number,
+        generation,
+        reference_byte_offset,
+        after_keyword_offset: keyword_offset + keyword.len(),
+    })
+}
+
+const fn malformed_shape(error_byte_offset: usize) -> ObjectReferenceShapeError {
+    ObjectReferenceShapeError {
+        error_byte_offset: Some(error_byte_offset),
+        reason: ObjectReferenceShapeRejection::Malformed,
+    }
+}
+
 pub fn consume_keyword(bytes: &[u8], keyword: &[u8]) -> Option<usize> {
     let after_keyword = bytes.strip_prefix(keyword)?;
     if after_keyword

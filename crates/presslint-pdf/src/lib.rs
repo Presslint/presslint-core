@@ -13,6 +13,7 @@ mod array_extent;
 mod classic_xref;
 mod dictionary_entries;
 mod dictionary_extent;
+mod indirect_reference;
 mod object_body;
 mod object_header;
 mod source;
@@ -38,6 +39,10 @@ pub use dictionary_entries::{
 pub use dictionary_extent::{
     DictionaryExtentInspection, DictionaryExtentInspectionError,
     DictionaryExtentInspectionRejection, inspect_dictionary_extent,
+};
+pub use indirect_reference::{
+    IndirectReferenceByteRange, IndirectReferenceInspection, IndirectReferenceInspectionError,
+    IndirectReferenceInspectionRejection, parse_indirect_reference,
 };
 pub use object_body::{
     IndirectObjectBodyLeadingTokenKind, IndirectObjectBodyTokenInspection,

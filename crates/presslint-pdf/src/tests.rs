@@ -4,6 +4,7 @@ mod array_extent;
 mod classic_xref;
 mod dictionary_entries;
 mod dictionary_extent;
+mod indirect_reference;
 mod object_body;
 mod object_header;
 mod source;

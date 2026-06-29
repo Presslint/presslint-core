@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::IndirectRef;
-use crate::source_utils::{consume_keyword, count_leading_digits, skip_whitespace};
+use crate::source_utils::{ObjectReferenceShapeRejection, parse_object_reference_shape};
 
 const INDIRECT_OBJECT_HEADER_SCAN_LIMIT: usize = 128;
 const OBJ_KEYWORD: &[u8] = b"obj";
@@ -76,155 +76,42 @@ pub fn inspect_indirect_object_header(
     input: &[u8],
     byte_offset: usize,
 ) -> Result<IndirectObjectHeaderInspection, IndirectObjectHeaderInspectionError> {
-    if byte_offset >= input.len() {
-        return Err(object_header_error(
-            input,
-            byte_offset,
-            IndirectObjectHeaderInspectionRejection::OffsetOutOfBounds,
-        ));
-    }
-
-    let window_end = byte_offset
-        .saturating_add(INDIRECT_OBJECT_HEADER_SCAN_LIMIT)
-        .min(input.len());
-    let window = &input[byte_offset..window_end];
-    let leading_whitespace = skip_whitespace(window);
-    let header_byte_offset = byte_offset + leading_whitespace;
-    let content = &window[leading_whitespace..];
-
-    let object_digits = count_leading_digits(content);
-    if object_digits == 0 {
-        return Err(malformed_object_header_error(
-            input,
-            byte_offset,
-            header_byte_offset,
-        ));
-    }
-    let after_object = &content[object_digits..];
-
-    let object_generation_gap = skip_whitespace(after_object);
-    if object_generation_gap == 0 {
-        return Err(malformed_object_header_error(
-            input,
-            byte_offset,
-            header_byte_offset,
-        ));
-    }
-    let generation_field = &after_object[object_generation_gap..];
-
-    let generation_digits = count_leading_digits(generation_field);
-    if generation_digits == 0 {
-        return Err(malformed_object_header_error(
-            input,
-            byte_offset,
-            header_byte_offset + object_digits + object_generation_gap,
-        ));
-    }
-    let after_generation = &generation_field[generation_digits..];
-
-    let generation_keyword_gap = skip_whitespace(after_generation);
-    if generation_keyword_gap == 0 {
-        return Err(malformed_object_header_error(
-            input,
-            byte_offset,
-            header_byte_offset + object_digits + object_generation_gap + generation_digits,
-        ));
-    }
-    let keyword_offset = header_byte_offset
-        + object_digits
-        + object_generation_gap
-        + generation_digits
-        + generation_keyword_gap;
-    let keyword_content = &after_generation[generation_keyword_gap..];
-    if consume_keyword(keyword_content, OBJ_KEYWORD).is_none() {
-        return Err(malformed_object_header_error(
-            input,
-            byte_offset,
-            keyword_offset,
-        ));
-    }
-
-    let object_number = parse_u64_decimal(&content[..object_digits])
-        .and_then(|value| u32::try_from(value).ok())
-        .ok_or_else(|| {
-            object_header_error_at(
-                input,
-                byte_offset,
-                IndirectObjectHeaderInspectionRejection::ObjectNumberOutOfRange,
-                header_byte_offset,
-            )
-        })?;
-    let generation = parse_u64_decimal(&generation_field[..generation_digits])
-        .and_then(|value| u16::try_from(value).ok())
-        .ok_or_else(|| {
-            object_header_error_at(
-                input,
-                byte_offset,
-                IndirectObjectHeaderInspectionRejection::GenerationOutOfRange,
-                header_byte_offset + object_digits + object_generation_gap,
-            )
-        })?;
-    let after_obj_keyword_offset = keyword_offset + b"obj".len();
-
-    Ok(IndirectObjectHeaderInspection {
-        reference: IndirectRef {
-            object_number,
-            generation,
-        },
-        header_byte_offset,
-        header_range: IndirectObjectHeaderByteRange {
-            start: header_byte_offset,
-            end: after_obj_keyword_offset,
-        },
-        after_obj_keyword_offset,
-    })
-}
-
-const fn object_header_error(
-    input: &[u8],
-    byte_offset: usize,
-    reason: IndirectObjectHeaderInspectionRejection,
-) -> IndirectObjectHeaderInspectionError {
-    IndirectObjectHeaderInspectionError {
-        byte_offset,
-        byte_len: input.len(),
-        error_byte_offset: None,
-        reason,
-    }
-}
-
-const fn object_header_error_at(
-    input: &[u8],
-    byte_offset: usize,
-    reason: IndirectObjectHeaderInspectionRejection,
-    error_byte_offset: usize,
-) -> IndirectObjectHeaderInspectionError {
-    IndirectObjectHeaderInspectionError {
-        byte_offset,
-        byte_len: input.len(),
-        error_byte_offset: Some(error_byte_offset),
-        reason,
-    }
-}
-
-const fn malformed_object_header_error(
-    input: &[u8],
-    byte_offset: usize,
-    error_byte_offset: usize,
-) -> IndirectObjectHeaderInspectionError {
-    object_header_error_at(
+    match parse_object_reference_shape(
         input,
         byte_offset,
-        IndirectObjectHeaderInspectionRejection::MalformedHeader,
-        error_byte_offset,
-    )
-}
-
-fn parse_u64_decimal(bytes: &[u8]) -> Option<u64> {
-    let mut value = 0u64;
-    for byte in bytes {
-        let digit = u64::from(byte - b'0');
-        value = value.checked_mul(10)?.checked_add(digit)?;
+        INDIRECT_OBJECT_HEADER_SCAN_LIMIT,
+        OBJ_KEYWORD,
+    ) {
+        Ok(shape) => Ok(IndirectObjectHeaderInspection {
+            reference: IndirectRef {
+                object_number: shape.object_number,
+                generation: shape.generation,
+            },
+            header_byte_offset: shape.reference_byte_offset,
+            header_range: IndirectObjectHeaderByteRange {
+                start: shape.reference_byte_offset,
+                end: shape.after_keyword_offset,
+            },
+            after_obj_keyword_offset: shape.after_keyword_offset,
+        }),
+        Err(error) => Err(IndirectObjectHeaderInspectionError {
+            byte_offset,
+            byte_len: input.len(),
+            error_byte_offset: error.error_byte_offset,
+            reason: match error.reason {
+                ObjectReferenceShapeRejection::OffsetOutOfBounds => {
+                    IndirectObjectHeaderInspectionRejection::OffsetOutOfBounds
+                }
+                ObjectReferenceShapeRejection::Malformed => {
+                    IndirectObjectHeaderInspectionRejection::MalformedHeader
+                }
+                ObjectReferenceShapeRejection::ObjectNumberOutOfRange => {
+                    IndirectObjectHeaderInspectionRejection::ObjectNumberOutOfRange
+                }
+                ObjectReferenceShapeRejection::GenerationOutOfRange => {
+                    IndirectObjectHeaderInspectionRejection::GenerationOutOfRange
+                }
+            },
+        }),
     }
-    Some(value)
 }
