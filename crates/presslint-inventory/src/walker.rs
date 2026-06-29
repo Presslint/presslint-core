@@ -267,6 +267,17 @@ pub enum GraphicsStateEventKind {
         /// Resource name operand without the leading slash.
         name: PdfName,
     },
+    /// `gs` invoked an `ExtGState` parameter dictionary by name.
+    ///
+    /// Carries the resource-name operand without the leading slash, mirroring
+    /// [`XObjectInvoke`](Self::XObjectInvoke). This event only surfaces the
+    /// invocation and its provenance; the graphics-state snapshot is left
+    /// unchanged and no `ExtGState` parameter semantics (overprint, blend mode,
+    /// alpha, soft mask, …) are modelled here.
+    SetExtGState {
+        /// Resource name operand without the leading slash.
+        name: PdfName,
+    },
     /// Operator outside this walker slice; state is unchanged.
     NoOp,
 }
@@ -489,6 +500,9 @@ impl GraphicsStateWalker {
                 self.state.text_rendering_mode,
             ),
             b"Do" => Ok(GraphicsStateEventKind::XObjectInvoke {
+                name: name_operand(source, operator, record)?,
+            }),
+            b"gs" => Ok(GraphicsStateEventKind::SetExtGState {
                 name: name_operand(source, operator, record)?,
             }),
             _ => Ok(GraphicsStateEventKind::NoOp),

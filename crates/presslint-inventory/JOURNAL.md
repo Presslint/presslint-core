@@ -11,8 +11,17 @@
 - The walker emits ordered events with operator and record byte provenance.
 - Supported state slice: `q`, `Q`, `cm`, device color operators (`G`, `g`,
   `RG`, `rg`, `K`, `k`), text rendering mode (`Tr`), basic path paint
-  operators, first-slice text-showing operators (`Tj`, `TJ`, `'`, `"`), and
-  XObject invocation (`Do`).
+  operators, first-slice text-showing operators (`Tj`, `TJ`, `'`, `"`),
+  XObject invocation (`Do`), and ExtGState invocation (`gs`).
+- `gs` emits a named `SetExtGState { name }` event that carries the ExtGState
+  resource name without the leading slash, reusing the shared `name_operand`
+  helper exactly like `Do`'s `XObjectInvoke`. It surfaces only the invocation
+  plus operator/record byte provenance: the graphics-state snapshot is left
+  unchanged (relying on the existing `q`/`Q` clone for save/restore), and no
+  ExtGState parameter semantics (overprint, blend mode, alpha, soft mask) are
+  modelled yet. A malformed `gs` operand reuses the existing
+  `MalformedOperandCount`/`MalformedNameOperand` errors, and `gs` no longer
+  falls into the silent `NoOp` bucket.
 - Unsupported operators emit explicit no-op events.
 - Structured errors cover graphics-state stack underflow, malformed operand
   counts, malformed numeric operands, non-finite numeric operands, and invalid
