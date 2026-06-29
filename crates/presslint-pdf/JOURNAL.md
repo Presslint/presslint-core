@@ -211,6 +211,45 @@
   `/Contents`, resources, annotations, inherited attributes, streams, xref
   streams, object streams, encryption, linearization, incremental updates, or
   `/Prev` chains.
+- Adds `inspect_page_tree_node`, a focused composition helper for
+  caller-provided bytes and an already-located page-tree node object byte offset
+  (typically the target of a catalog `/Pages` reference). It delegates
+  page-tree-node object inspection to `inspect_indirect_object_dictionary`,
+  matches only the exact raw top-level key bytes `/Kids` and `/Count` from each
+  entry's `key_range`, validates the shallow `/Kids` value kind as `array`, and
+  bounds that array value with `inspect_array_extent` at the value range start.
+  The report carries the delegated `IndirectObjectDictionaryInspection`, the
+  `/Kids` key/value byte ranges, the delegated `ArrayExtentInspection` for the
+  `/Kids` value (open/close/after offsets and observed nesting depth), and the
+  `/Count` key/value byte ranges; it retains or copies no PDF bytes, object
+  bodies, stream bodies, page dictionaries, contents streams, `/Kids` array
+  elements, or referenced-object bytes, reporting only byte ranges, offsets, and
+  the depth scalar. Structured public rejections distinguish a delegated
+  object-dictionary failure (`NodeDictionary`), missing `/Kids` (`MissingKids`),
+  duplicate exact `/Kids` (`DuplicateKids`), a non-array `/Kids` value
+  (`NonArrayKidsValue`), a delegated `/Kids` array-extent failure
+  (`KidsArrayExtent`), missing `/Count` (`MissingCount`), duplicate exact
+  `/Count` (`DuplicateCount`), and a non-number-like `/Count` value
+  (`NonNumberCountValue`). The standalone `inspect_array_extent` call is what
+  populates the report's `kids_array_extent`; because
+  `inspect_indirect_object_dictionary` already bounds array values through
+  `inspect_dictionary_entries`, an unterminated `/Kids` array currently fails at
+  that delegated step and surfaces its array-extent rejection reason through the
+  `NodeDictionary` channel, while `KidsArrayExtent` remains the dedicated error
+  channel for the bounding call. Non-goals for this slice: it does not scan
+  `/Kids` array elements into indirect references (it only bounds the array),
+  parse the `/Count` integer (it confirms only the shallow number-like value
+  kind and reports its byte range), descend into child page-tree nodes or page
+  objects, resolve `/Kids` references, follow `/Parent`, require or decode
+  `/Type /Pages`, decode name escapes, inspect page dictionaries, `/Contents`,
+  `/MediaBox`, resources, annotations, or inherited attributes, or follow
+  `/Prev` chains, xref streams, object streams, encryption, linearization, or
+  incremental updates. It lives in its own `page_tree_node.rs` module. A
+  composition test chains `inspect_classic_xref_table ->
+  inspect_classic_xref_trailer_root -> resolve_classic_xref_object ->
+  inspect_catalog_pages -> resolve_classic_xref_object -> inspect_page_tree_node`
+  over synthetic bytes to bound the `/Kids` array and locate `/Count` without
+  scanning array elements.
 - Promotes the shared `parse_u64_decimal` decimal parser into `source_utils` so
   the indirect-reference and object-header helpers reuse one bounded
   decimal-to-`u64` routine instead of duplicating it.

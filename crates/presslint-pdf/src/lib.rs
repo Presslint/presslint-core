@@ -18,6 +18,7 @@ mod indirect_reference;
 mod object_body;
 mod object_dictionary;
 mod object_header;
+mod page_tree_node;
 mod source;
 mod source_utils;
 mod startxref;
@@ -64,6 +65,10 @@ pub use object_header::{
     IndirectObjectHeaderByteRange, IndirectObjectHeaderInspection,
     IndirectObjectHeaderInspectionError, IndirectObjectHeaderInspectionRejection,
     inspect_indirect_object_header,
+};
+pub use page_tree_node::{
+    PageTreeNodeInspection, PageTreeNodeInspectionError, PageTreeNodeInspectionRejection,
+    inspect_page_tree_node,
 };
 pub use source::{
     PDF_HEADER_SCAN_LIMIT, PdfHeader, PdfSourceDiagnostic, PdfSourceInspection,
