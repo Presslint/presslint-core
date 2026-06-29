@@ -366,6 +366,31 @@
   inspect_page_contents` over synthetic bytes, reporting a resolved leaf page's
   single-reference contents and a second leaf's source-ordered array contents
   without copying PDF bytes.
+- Adds `inspect_page_content_targets`, a locate-only composition helper for
+  caller-provided bytes, an existing `ClassicXrefTableInspection`, and the
+  direct `/Contents` references already reported by `inspect_page_contents`.
+  The report carries the caller-visible source length and one source-ordered
+  `PageContentTargetInspection` entry per direct content reference. Resolved
+  entries carry the original `PageContentReference`, the matching in-use object
+  byte offset, and the xref generation. Free, missing, ambiguous, and
+  generation-mismatched xref outcomes become structured skipped entries instead
+  of being silently dropped, and later references continue to resolve. The
+  helper reuses `resolve_classic_xref_object` for each object number and mirrors
+  `inspect_page_tree_reference_target`'s generation policy: only one in-use xref
+  entry with the requested generation is accepted. It retains or copies no PDF
+  bytes, object bodies, stream bodies, decoded streams, content bytes, or source
+  slices; the only owned allocation is the public source-ordered report vector.
+  Non-goals for this slice: it does not inspect content stream dictionaries,
+  locate `stream`/`endstream`, parse `/Length`, decode or concatenate streams,
+  tokenize content bytes, mutate PDF bytes, traverse `/Prev`, add xref stream or
+  object stream support, build caches/indexes, or connect resolved contents to
+  syntax or inventory crates. A composition test chains catalog `/Pages`, page
+  tree `/Kids`, leaf page `/Contents`, and classic-xref content target
+  resolution over synthetic bytes.
+- Ablation T077: replaces the page-content-target report assembly loop with a
+  direct source-ordered iterator collection over the already reported
+  `/Contents` references. Runtime behavior, public API, serde shape, skip
+  semantics, and allocation shape are unchanged.
 - Ablation T075: removes duplicate page-tree-reference test fixture builders and
   reuses the existing shared test helpers for indirect references and synthetic
   classic xref inspections. Runtime behavior, public APIs, and coverage are
