@@ -9,6 +9,7 @@ mod object_body;
 mod object_header;
 mod source;
 mod trailer;
+mod trailer_root;
 
 use super::{
     ClassicXrefAmbiguousObjectEntry, ClassicXrefEntry, ClassicXrefEntryState,

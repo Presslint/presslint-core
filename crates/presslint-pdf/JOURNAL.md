@@ -149,6 +149,20 @@
   `/Root` entry's `IndirectReferenceLike` value span into an `IndirectRef` and
   feeding its object number to `resolve_classic_xref_object` to locate the
   catalog object's byte offset without inspecting the catalog body.
+- Adds `inspect_classic_xref_trailer_root`, a focused composition helper for
+  caller-provided bytes and a classic xref `trailer` keyword offset. It
+  delegates trailer dictionary location to `inspect_classic_xref_trailer_dictionary`,
+  scans top-level trailer entries with `inspect_dictionary_entries`, matches
+  only the exact raw top-level key bytes `/Root`, and parses the selected value
+  with `parse_indirect_reference`. The report carries the delegated trailer
+  dictionary offsets, `/Root` key and value byte ranges, and the parsed
+  `IndirectRef`; it does not retain or copy trailer bytes, object bodies,
+  stream bodies, catalog dictionaries, page trees, or referenced-object bytes,
+  and it does not resolve the root reference. Structured public rejections cover
+  delegated trailer dictionary failures, delegated dictionary entry failures,
+  missing `/Root`, duplicate exact `/Root` keys, direct non-reference values
+  such as dictionaries/names/numbers, and malformed scalar reference attempts
+  such as `1 0 obj`.
 - Promotes the shared `parse_u64_decimal` decimal parser into `source_utils` so
   the indirect-reference and object-header helpers reuse one bounded
   decimal-to-`u64` routine instead of duplicating it.

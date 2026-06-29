@@ -20,6 +20,7 @@ mod source;
 mod source_utils;
 mod startxref;
 mod trailer;
+mod trailer_root;
 mod xref_resolve;
 mod xref_section;
 
@@ -63,6 +64,10 @@ pub use source::{
 pub use trailer::{
     ClassicXrefTrailerDictionaryInspection, ClassicXrefTrailerDictionaryInspectionError,
     ClassicXrefTrailerDictionaryInspectionRejection, inspect_classic_xref_trailer_dictionary,
+};
+pub use trailer_root::{
+    ClassicXrefTrailerRootInspection, ClassicXrefTrailerRootInspectionError,
+    ClassicXrefTrailerRootInspectionRejection, inspect_classic_xref_trailer_root,
 };
 pub use xref_resolve::{
     ClassicXrefAmbiguousObjectEntry, ClassicXrefObjectLocation, resolve_classic_xref_object,
