@@ -1,5 +1,6 @@
 #![allow(clippy::expect_used, clippy::missing_errors_doc)]
 
+mod array_extent;
 mod classic_xref;
 mod dictionary_extent;
 mod object_body;

@@ -9,6 +9,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
+mod array_extent;
 mod classic_xref;
 mod dictionary_extent;
 mod object_body;
@@ -23,6 +24,10 @@ mod xref_section;
 #[cfg(test)]
 mod tests;
 
+pub use array_extent::{
+    ArrayExtentInspection, ArrayExtentInspectionError, ArrayExtentInspectionRejection,
+    inspect_array_extent,
+};
 pub use classic_xref::inspect_classic_xref_table;
 pub use dictionary_extent::{
     DictionaryExtentInspection, DictionaryExtentInspectionError,

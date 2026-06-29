@@ -74,6 +74,28 @@
   structured errors for offsets at or beyond EOF, whitespace-only tails, a first
   token that is not `<<`, an unterminated literal or hex string, and an
   unterminated dictionary.
+- Adds `inspect_array_extent`, a bounded single-pass helper for caller-provided
+  bytes and a byte offset that begins an array (typically the
+  `first_token_byte_offset` reported for an `ArrayOpen`). It skips optional PDF
+  whitespace, requires the first significant token to be the `[` array-open
+  delimiter, and tracks `[`/`]` nesting depth so the reported close is the
+  matching close of the outermost `[`, not the first inner `]`. It reports the
+  open `[` offset, the closing `]` offset, the exclusive byte offset after the
+  close, and the deepest observed nesting depth. Literal strings `( ... )`
+  (honoring `\` escapes and balanced unescaped parentheses), hex strings
+  `< ... >` (a `<` not followed by `<`), and `%` comments are skipped as opaque
+  spans so `]` bytes inside them never affect the depth count. A `<<` dictionary
+  open is advanced past as a nested-dictionary delimiter so its leading `<` is
+  not misread as a hex-string open; only `[`/`]` delimiters drive the depth
+  count. A private `MAX_ARRAY_NESTING_DEPTH` constant bounds pathological
+  inputs: exceeding it yields a structured `MaxNestingExceeded` rejection rather
+  than unbounded work. The helper decodes no element, name, number, or string
+  contents, and never retains or copies PDF bytes; it reports only byte offsets
+  and the depth scalar. It returns structured errors for offsets at or beyond
+  EOF, whitespace-only tails, a first token that is not `[`, an unterminated
+  literal or hex string, and an unterminated array. It lives in its own
+  `array_extent.rs` module and leaves `inspect_dictionary_extent` and
+  `inspect_indirect_object_body_token` unchanged.
 - Adds `inspect_classic_xref_trailer_dictionary`, a pure composition helper for
   caller-provided bytes and a classic xref `trailer` keyword offset. It skips
   optional PDF whitespace at the caller offset, validates the resolved
