@@ -33,6 +33,46 @@
   stream support, object stream support, indirect `/Length` resolution,
   `/Filter` or `/DecodeParms` validation, content-stream tokenization,
   decompression, concatenation, or page semantics.
+- Adds `resolve_classic_xref_integer_object`, a focused report-only composition
+  helper for caller-provided bytes, an existing `ClassicXrefTableInspection`, and
+  the byte offset where an `N G R` value begins (typically a `DictionaryEntrySpan`
+  `value_range.start` classified `IndirectReferenceLike`, such as an indirect
+  `/Length`). It composes existing bounded inspectors only: `parse_indirect_reference`
+  for the `N G R` value, `resolve_classic_xref_object` to locate the referenced
+  object, `inspect_indirect_object_header` to validate the resolved object header,
+  and `inspect_indirect_object_body_token` to require a `NumberLike` leading
+  token; it then parses the leading ASCII-digit run as the integer value. Only a
+  single `ClassicXrefObjectLocation::InUse` entry is accepted; `Free`, `NotFound`,
+  and `Ambiguous` locations produce the structured `FreeObject`, `ObjectNotFound`,
+  and `AmbiguousObject` rejections, each carrying the resolved object number in
+  the error's `object_number` field. The resolved object header's parsed
+  `IndirectRef` is checked against the reference's object and generation numbers;
+  a mismatch is a `ReferenceMismatch` rejection carrying the header's `IndirectRef`,
+  not a silent acceptance. The integer body is accepted only as a non-negative
+  ASCII-digit run terminated by PDF whitespace, a delimiter, or the `endobj`
+  keyword: `-1`, `1.0`, `+1`, an empty run, and trailing non-delimiter garbage
+  (and an end-of-file with no terminator) are `MalformedInteger`, a value that
+  does not fit `usize` is the distinct `IntegerOutOfRange`, and a non-number-like
+  body leading token (name, string, array, dictionary, boolean, null, etc.) is
+  `NonIntegerBody` carrying the classified `IndirectObjectBodyLeadingTokenKind`.
+  Delegated reference, header, and body-token failures surface through the
+  dedicated `Reference`, `Header`, and `BodyToken` channels with the underlying
+  rejection reason preserved. The report carries the parsed `IndirectRef`, the
+  resolved in-use object byte offset, the integer value byte range, and the parsed
+  `usize`; it retains or copies no PDF bytes, object bodies, stream bodies,
+  dictionaries, or source slices. It resolves exactly one reference one level
+  deep: it does not follow chains of indirect references, read `/Prev`, parse
+  object streams, or resolve anything beyond the single referenced integer object.
+  The only owned allocation is the fixed-size public report; the work is one
+  reference parse, one allocation-free xref-table scan, one delegated header
+  inspection, one body-token classification, and a fixed-size checked digit-run
+  parse, so no benchmark was added. It lives in its own `integer_object.rs`
+  module (sibling to `object_stream.rs` / `object_dictionary.rs`). A composition
+  test parses a `<< /Length 7 0 R >>` dictionary's `IndirectReferenceLike`
+  `/Length` value span with `inspect_dictionary_entries` and resolves it to an
+  integer through this helper. The named follow-up is wiring this primitive into
+  an indirect-length stream-data extent helper (the deferred indirect case of
+  `inspect_direct_length_content_stream_data_extent`'s `IndirectLength`).
 - Adds bounded source inspection over caller-provided bytes:
   `inspect_pdf_source` reports total byte length, `%PDF-M.N` header offset and
   version from a fixed leading window, and final `startxref` offset from a fixed

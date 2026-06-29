@@ -15,6 +15,7 @@ mod classic_xref;
 mod dictionary_entries;
 mod dictionary_extent;
 mod indirect_reference;
+mod integer_object;
 mod object_body;
 mod object_dictionary;
 mod object_header;
@@ -57,6 +58,11 @@ pub use dictionary_extent::{
 pub use indirect_reference::{
     IndirectReferenceByteRange, IndirectReferenceInspection, IndirectReferenceInspectionError,
     IndirectReferenceInspectionRejection, parse_indirect_reference,
+};
+pub use integer_object::{
+    ClassicXrefIntegerObjectResolution, ClassicXrefIntegerObjectResolutionError,
+    ClassicXrefIntegerObjectResolutionRejection, IntegerObjectValueByteRange,
+    resolve_classic_xref_integer_object,
 };
 pub use object_body::{
     IndirectObjectBodyLeadingTokenKind, IndirectObjectBodyTokenInspection,
