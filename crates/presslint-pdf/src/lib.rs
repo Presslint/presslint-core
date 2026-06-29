@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
 mod classic_xref;
+mod object_body;
 mod object_header;
 mod source;
 mod source_utils;
@@ -21,6 +22,11 @@ mod xref_section;
 mod tests;
 
 pub use classic_xref::inspect_classic_xref_table;
+pub use object_body::{
+    IndirectObjectBodyLeadingTokenKind, IndirectObjectBodyTokenInspection,
+    IndirectObjectBodyTokenInspectionError, IndirectObjectBodyTokenInspectionRejection,
+    inspect_indirect_object_body_token,
+};
 pub use object_header::{
     IndirectObjectHeaderByteRange, IndirectObjectHeaderInspection,
     IndirectObjectHeaderInspectionError, IndirectObjectHeaderInspectionRejection,

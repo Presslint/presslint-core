@@ -47,6 +47,14 @@
   `obj`. It validates public numeric ranges and returns structured errors for
   out-of-bounds offsets, malformed headers, and object/generation range
   failures without retaining PDF bytes or parsing object bodies.
+- Adds `inspect_indirect_object_body_token`, a pure report-only helper for
+  caller-provided bytes and an expected indirect object body offset. It skips
+  PDF whitespace, reports the resolved first-token byte offset, and classifies
+  only the broad leading token family: dictionary open `<<`, hex-string open
+  `<`, array open, name, literal string, number-like, boolean, or null. It
+  returns structured errors for offsets at or beyond EOF, whitespace-only tails,
+  and unclassified leading bytes, without copying object bodies, stream bodies,
+  dictionaries, arrays, strings, names, or numeric values.
 - Reports malformed or unsupported source shape through structured public
   rejection and diagnostic enums without retaining or copying PDF bytes.
 - The only owned allocations introduced by classic table inspection are the
