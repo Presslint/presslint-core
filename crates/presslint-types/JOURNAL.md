@@ -1,4 +1,4 @@
-# presslint-core Journal
+# presslint-types Journal
 
 ## Current State
 

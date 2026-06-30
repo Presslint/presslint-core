@@ -1,9 +1,9 @@
 #![allow(missing_docs)]
 
 use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
-use presslint_core::{ContentScope, PageIndex, PdfName};
 use presslint_inventory::{build_inventory, walk_graphics_state};
 use presslint_syntax::{OperatorRecord, assemble_operators, tokenize};
+use presslint_types::{ContentScope, PageIndex, PdfName};
 
 const SMALL_STREAM: &[u8] = br"
 q

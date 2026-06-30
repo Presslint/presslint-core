@@ -2,11 +2,11 @@
 
 mod json;
 
-use presslint_core::{
+use presslint_inventory::InventoryEntry;
+use presslint_types::{
     ColorObservation, ColorSpace, ColorUsage, ContentScope, EditCapability, ObjectId, ObjectKind,
     PageIndex, Provenance,
 };
-use presslint_inventory::InventoryEntry;
 use serde::{Deserialize, Serialize};
 
 use self::json::{Json, JsonSerializer};
@@ -34,7 +34,7 @@ fn assert_predicate_json(predicate: &Predicate, expected_json: Json) {
 
 fn form_xobject_scope(name: &[u8]) -> ContentScope {
     ContentScope::FormXObject {
-        name: presslint_core::PdfName(name.to_vec()),
+        name: presslint_types::PdfName(name.to_vec()),
     }
 }
 

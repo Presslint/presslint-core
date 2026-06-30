@@ -5,10 +5,10 @@ edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "Serializable selector DSL for presslint-core inventory entries."
+description = "Serializable selector DSL for presslint inventory entries."
 
 [dependencies]
-presslint-core.workspace = true
+presslint-types.workspace = true
 presslint-inventory.workspace = true
 serde.workspace = true
 

@@ -1,5 +1,5 @@
-use presslint_core::{ByteRange, ColorObservation, ColorSpace, ColorUsage, PdfName};
 use presslint_syntax::OperatorRecord;
+use presslint_types::{ByteRange, ColorObservation, ColorSpace, ColorUsage, PdfName};
 use serde::{Deserialize, Serialize};
 
 use crate::operands::{

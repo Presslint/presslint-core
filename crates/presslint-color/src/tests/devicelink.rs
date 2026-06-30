@@ -1,4 +1,4 @@
-use presslint_core::{ColorSpace, PdfName};
+use presslint_types::{ColorSpace, PdfName};
 
 use super::json::Json;
 use super::{ColorPolicy, OverprintPolicy, SpotPolicy, TransformRequest, assert_json_round_trip};

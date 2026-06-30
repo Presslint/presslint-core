@@ -1,7 +1,8 @@
 [workspace]
 resolver = "3"
 members = [
-    "crates/presslint-core",
+    "crates/presslint",
+    "crates/presslint-types",
     "crates/presslint-pdf",
     "crates/presslint-syntax",
     "crates/presslint-inventory",
@@ -14,7 +15,7 @@ members = [
 version = "0.0.1"
 edition = "2024"
 rust-version = "1.87"
-authors = ["Lorenzo Battiston and presslint-core contributors"]
+authors = ["Lorenzo Battiston and presslint contributors"]
 license = "Apache-2.0"
 description = "Programmable PDF prepress core."
 readme = "README.md"
@@ -22,7 +23,8 @@ keywords = ["pdf", "prepress", "color", "icc"]
 categories = ["graphics", "multimedia", "parser-implementations"]
 
 [workspace.dependencies]
-presslint-core = { path = "crates/presslint-core", version = "0.0.1" }
+presslint = { path = "crates/presslint", version = "0.0.1" }
+presslint-types = { path = "crates/presslint-types", version = "0.0.1" }
 presslint-pdf = { path = "crates/presslint-pdf", version = "0.0.1" }
 presslint-syntax = { path = "crates/presslint-syntax", version = "0.0.1" }
 presslint-inventory = { path = "crates/presslint-inventory", version = "0.0.1" }

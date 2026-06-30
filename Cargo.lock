@@ -231,14 +231,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6790f58c7ff633d8771f42965289203411a5e5c68388703c06e14f24770b41e"
 
 [[package]]
+name = "presslint"
+version = "0.0.1"
+dependencies = [
+ "presslint-actions",
+ "presslint-color",
+ "presslint-inventory",
+ "presslint-pdf",
+ "presslint-selectors",
+ "presslint-syntax",
+ "presslint-types",
+]
+
+[[package]]
 name = "presslint-actions"
 version = "0.0.1"
 dependencies = [
  "criterion",
- "presslint-core",
  "presslint-inventory",
  "presslint-selectors",
  "presslint-syntax",
+ "presslint-types",
  "serde",
 ]
 
@@ -246,14 +259,7 @@ dependencies = [
 name = "presslint-color"
 version = "0.0.1"
 dependencies = [
- "presslint-core",
- "serde",
-]
-
-[[package]]
-name = "presslint-core"
-version = "0.0.1"
-dependencies = [
+ "presslint-types",
  "serde",
 ]
 
@@ -262,8 +268,8 @@ name = "presslint-inventory"
 version = "0.0.1"
 dependencies = [
  "criterion",
- "presslint-core",
  "presslint-syntax",
+ "presslint-types",
  "serde",
 ]
 
@@ -281,8 +287,8 @@ dependencies = [
 name = "presslint-selectors"
 version = "0.0.1"
 dependencies = [
- "presslint-core",
  "presslint-inventory",
+ "presslint-types",
  "serde",
 ]
 
@@ -291,7 +297,14 @@ name = "presslint-syntax"
 version = "0.0.1"
 dependencies = [
  "criterion",
- "presslint-core",
+ "presslint-types",
+ "serde",
+]
+
+[[package]]
+name = "presslint-types"
+version = "0.0.1"
+dependencies = [
  "serde",
 ]
 

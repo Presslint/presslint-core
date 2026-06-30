@@ -26,7 +26,7 @@
 //! the helper returns a structured [`TransformCacheKeyRejection`] instead of
 //! fabricating a key.
 
-use presslint_core::ColorSpace;
+use presslint_types::ColorSpace;
 use serde::{Deserialize, Serialize};
 
 use crate::devicelink::DeviceLinkDecision;

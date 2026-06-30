@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "Structural PDF access interfaces for presslint-core."
+description = "Structural PDF access interfaces for presslint."
 
 [dependencies]
 miniz_oxide.workspace = true

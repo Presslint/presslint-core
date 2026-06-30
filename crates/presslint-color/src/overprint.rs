@@ -1,6 +1,6 @@
 //! Overprint policy resolution.
 
-use presslint_core::ColorSpace;
+use presslint_types::ColorSpace;
 use serde::{Deserialize, Serialize};
 
 use crate::policy::OverprintPolicy;

@@ -1,6 +1,6 @@
 # Architecture
 
-`presslint-core` is built around a small set of stable concepts:
+`presslint` is built around a small set of stable concepts:
 
 1. **Structural PDF access** opens documents, exposes objects and streams, and
    provides deterministic write seams.

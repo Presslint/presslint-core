@@ -5,10 +5,10 @@ edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "Color-management policy interfaces for presslint-core."
+description = "Color-management policy interfaces for presslint."
 
 [dependencies]
-presslint-core.workspace = true
+presslint-types.workspace = true
 serde.workspace = true
 
 [lints]

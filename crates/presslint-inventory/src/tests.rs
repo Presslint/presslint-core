@@ -1,7 +1,7 @@
-use presslint_core::{
+use presslint_syntax::{OperatorRecord, TokenRef, assemble_operators, tokenize};
+use presslint_types::{
     ByteRange, ColorSpace, ColorUsage, ContentScope, EditCapability, ObjectKind, PageIndex, PdfName,
 };
-use presslint_syntax::{OperatorRecord, TokenRef, assemble_operators, tokenize};
 
 mod combined;
 mod extgstate;
@@ -206,11 +206,11 @@ fn invalid_record_range_returns_structured_error() -> Result<(), String> {
     let record = OperatorRecord {
         operator: TokenRef {
             token_index: 0,
-            range: presslint_core::ByteRange { start: 0, end: 1 },
+            range: presslint_types::ByteRange { start: 0, end: 1 },
         },
         operands: Vec::new(),
         trivia: Vec::new(),
-        range: presslint_core::ByteRange { start: 2, end: 1 },
+        range: presslint_types::ByteRange { start: 2, end: 1 },
     };
 
     let Err(err) = walker.step(b"m", 0, &record) else {
@@ -221,7 +221,7 @@ fn invalid_record_range_returns_structured_error() -> Result<(), String> {
         err,
         GraphicsWalkError::new(
             GraphicsWalkErrorKind::InvalidSourceRange,
-            presslint_core::ByteRange { start: 2, end: 1 },
+            presslint_types::ByteRange { start: 2, end: 1 },
         )
     );
     Ok(())
@@ -237,7 +237,7 @@ fn stack_underflow_returns_structured_error() -> Result<(), String> {
         err,
         GraphicsWalkError::new(
             GraphicsWalkErrorKind::GraphicsStateStackUnderflow,
-            presslint_core::ByteRange { start: 0, end: 1 },
+            presslint_types::ByteRange { start: 0, end: 1 },
         )
     );
     Ok(())

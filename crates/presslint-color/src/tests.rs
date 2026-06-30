@@ -10,7 +10,7 @@ mod transform_plan;
 
 use std::fmt;
 
-use presslint_core::{ColorSpace, PdfName};
+use presslint_types::{ColorSpace, PdfName};
 use serde::{Deserialize, Serialize};
 
 use self::json::{Json, JsonSerializer};
@@ -70,7 +70,7 @@ fn color_policy_has_stable_json_shape() {
 #[test]
 fn transform_request_has_stable_json_shape() {
     // The request pins both a unit `ColorSpace` variant (`device_cmyk`) and the
-    // `Resource(PdfName)` newtype variant, so the nested `presslint-core`
+    // `Resource(PdfName)` newtype variant, so the nested `presslint-types`
     // `ColorSpace` encoding is locked inside the request.
     assert_json_round_trip(
         &TransformRequest {

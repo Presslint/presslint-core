@@ -5,12 +5,12 @@ mod patch_boundary;
 
 use std::fmt::Debug;
 
-use presslint_core::{
+use presslint_inventory::{Inventory, InventoryEntry};
+use presslint_selectors::{Predicate, Selector};
+use presslint_types::{
     ByteRange, ColorObservation, ColorSpace, ColorUsage, ContentScope, EditCapability, ObjectId,
     ObjectKind, PageIndex, Provenance,
 };
-use presslint_inventory::{Inventory, InventoryEntry};
-use presslint_selectors::{Predicate, Selector};
 use serde::{Serialize, de::DeserializeOwned};
 
 use self::json::{Json, JsonSerializer};

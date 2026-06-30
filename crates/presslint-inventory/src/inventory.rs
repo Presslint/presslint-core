@@ -1,8 +1,8 @@
-use presslint_core::{
+use presslint_syntax::OperatorRecord;
+use presslint_types::{
     BoundingBox, ColorObservation, ColorSpace, ColorUsage, ContentScope, EditCapability, ObjectId,
     ObjectKind, PageIndex, PdfName, Provenance,
 };
-use presslint_syntax::OperatorRecord;
 use serde::{Deserialize, Serialize};
 
 use crate::digest::{

@@ -1,4 +1,4 @@
-use presslint_core::ByteRange;
+use presslint_types::ByteRange;
 
 use crate::model::{
     AssembleError, AssembledContentStream, Delimiter, OperandRecord, OperatorRecord, Token,

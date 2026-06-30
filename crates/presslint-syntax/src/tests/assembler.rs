@@ -1,4 +1,4 @@
-use presslint_core::ByteRange;
+use presslint_types::ByteRange;
 
 use crate::{AssembleError, TokenRef, assemble_operators, serialize_tokens_unmodified, tokenize};
 

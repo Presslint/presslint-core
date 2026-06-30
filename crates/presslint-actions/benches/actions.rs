@@ -2,10 +2,10 @@
 
 use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
 use presslint_actions::{Action, ConvertColor, Recipe, RecipeStep, plan_recipe};
-use presslint_core::{ColorSpace, ContentScope, EditCapability, ObjectKind, PageIndex, PdfName};
 use presslint_inventory::{Inventory, build_inventory};
 use presslint_selectors::{Predicate, Selector, matches as selector_matches};
 use presslint_syntax::{assemble_operators, tokenize};
+use presslint_types::{ColorSpace, ContentScope, EditCapability, ObjectKind, PageIndex, PdfName};
 
 // A small mixed stream: one default-color text show that becomes a
 // `MissingColorSource` skip (the page-default `DeviceGray` fill has no

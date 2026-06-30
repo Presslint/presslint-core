@@ -1,4 +1,4 @@
-use presslint_core::ByteRange;
+use presslint_types::ByteRange;
 
 use crate::{
     SerializeError, Token, TokenKind, serialize_tokens_unmodified, serialize_unmodified, tokenize,

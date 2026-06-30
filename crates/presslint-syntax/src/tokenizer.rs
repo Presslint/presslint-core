@@ -1,4 +1,4 @@
-use presslint_core::ByteRange;
+use presslint_types::ByteRange;
 
 use crate::model::{
     Delimiter, Keyword, NumberKind, StringKind, Token, TokenKind, TokenizeError, TokenizeErrorKind,

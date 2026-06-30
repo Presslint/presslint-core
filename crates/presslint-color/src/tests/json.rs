@@ -7,7 +7,7 @@
 //!
 //! The locked color contracts carry no `bool` or `f64` fields, so this model
 //! intentionally rejects those scalars. It does support the externally-tagged
-//! newtype enum variant `presslint-core::ColorSpace::Resource(PdfName)`, whose
+//! newtype enum variant `presslint-types::ColorSpace::Resource(PdfName)`, whose
 //! round-trip is pinned by the transform shape tests.
 
 #![allow(clippy::expect_used, clippy::missing_errors_doc)]

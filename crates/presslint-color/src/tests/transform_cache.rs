@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use presslint_core::{ColorSpace, PdfName};
+use presslint_types::{ColorSpace, PdfName};
 
 use super::assert_json_round_trip;
 use super::json::Json;

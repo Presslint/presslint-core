@@ -27,7 +27,7 @@
   boundary metadata only; it does not read, decode, serialize, or mutate PDF
   bytes.
 - Actions are requests only; they do not mutate documents directly.
-- Depends on `presslint-selectors` for selector data and `presslint-core` for
+- Depends on `presslint-selectors` for selector data and `presslint-types` for
   object identities and edit capabilities.
 - The public JSON encoding of `Recipe`, `RecipeStep`, every `Action` variant,
   `PatchPlan`, `PatchPlanMode`, `ActionPlan`, `PlannedPatch`,

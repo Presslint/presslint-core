@@ -1,6 +1,6 @@
 # Status
 
-`presslint-core` is an early scaffold.
+`presslint` is an early scaffold.
 
 Current focus:
 

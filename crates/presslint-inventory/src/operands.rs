@@ -1,5 +1,5 @@
-use presslint_core::{ByteRange, ColorSpace, PdfName};
 use presslint_syntax::OperatorRecord;
+use presslint_types::{ByteRange, ColorSpace, PdfName};
 
 use crate::walker::{GraphicsDeviceColor, GraphicsWalkError, GraphicsWalkErrorKind};
 

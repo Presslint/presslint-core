@@ -1,6 +1,6 @@
 //! Policy and request input contracts shared across color decisions.
 
-use presslint_core::ColorSpace;
+use presslint_types::ColorSpace;
 use serde::{Deserialize, Serialize};
 
 /// Color-conversion policy.

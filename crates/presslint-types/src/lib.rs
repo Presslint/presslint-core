@@ -1,4 +1,4 @@
-//! Shared public data types for `presslint-core`.
+//! Shared public data types for `presslint`.
 //!
 //! This crate contains stable identifiers, page geometry, color observations,
 //! and provenance records used by inventory, selectors, actions, and PDF write

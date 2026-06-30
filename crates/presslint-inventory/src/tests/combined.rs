@@ -1,5 +1,5 @@
-use presslint_core::{ByteRange, ContentScope, ObjectKind, PageIndex, PdfName};
 use presslint_syntax::{assemble_operators, tokenize};
+use presslint_types::{ByteRange, ContentScope, ObjectKind, PageIndex, PdfName};
 
 use super::{combined_inventory, text_inventory, vector_inventory};
 use crate::{build_inventory, inventory_from_graphics_events, walk_graphics_state};

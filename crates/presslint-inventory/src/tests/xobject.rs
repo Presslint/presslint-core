@@ -1,4 +1,4 @@
-use presslint_core::{ByteRange, ContentScope, EditCapability, ObjectKind, PageIndex, PdfName};
+use presslint_types::{ByteRange, ContentScope, EditCapability, ObjectKind, PageIndex, PdfName};
 
 use super::{form_inventory, image_inventory};
 

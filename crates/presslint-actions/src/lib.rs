@@ -2,9 +2,9 @@
 
 #![forbid(unsafe_code)]
 
-use presslint_core::{ByteRange, ColorSpace, ContentScope, EditCapability, ObjectId, PageIndex};
 use presslint_inventory::{Inventory, InventoryEntry};
 use presslint_selectors::{Selector, matches as selector_matches};
+use presslint_types::{ByteRange, ColorSpace, ContentScope, EditCapability, ObjectId, PageIndex};
 use serde::{Deserialize, Serialize};
 
 /// Versioned recipe document.

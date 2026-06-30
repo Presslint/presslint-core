@@ -1,4 +1,4 @@
-use presslint_core::{
+use presslint_types::{
     ByteRange, ColorObservation, ColorSpace, ColorUsage, ContentScope, PageIndex, PdfName,
 };
 

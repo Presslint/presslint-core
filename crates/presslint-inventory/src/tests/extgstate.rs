@@ -1,4 +1,4 @@
-use presslint_core::{ByteRange, ColorSpace, PdfName};
+use presslint_types::{ByteRange, ColorSpace, PdfName};
 
 use super::{json, walk};
 use crate::{GraphicsStateEventKind, GraphicsWalkErrorKind, PathPaintKind};

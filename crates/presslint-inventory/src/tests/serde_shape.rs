@@ -1,6 +1,6 @@
 use std::fmt;
 
-use presslint_core::{
+use presslint_types::{
     BoundingBox, ByteRange, ColorObservation, ColorSpace, ColorUsage, ContentScope, EditCapability,
     ObjectId, ObjectKind, PageIndex, PdfName, Provenance,
 };

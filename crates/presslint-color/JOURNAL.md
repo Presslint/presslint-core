@@ -3,7 +3,7 @@
 ## Current State
 
 - Defines color policy data contracts for spot handling and overprint handling.
-- Defines abstract transform requests over `presslint-core::ColorSpace`.
+- Defines abstract transform requests over `presslint-types::ColorSpace`.
 - Defines output-intent policy contracts for preserving existing intents,
   requiring an existing intent, or requesting a named/profile-backed target for
   a later writer.
@@ -132,7 +132,7 @@
   `SpotPolicy`, `OverprintPolicy`, `TransformRequest`, and the output-intent
   contracts plus the DeviceLink selection, spot-resolution, and
   overprint-resolution contracts. The transform fixture pins the nested
-  `presslint-core::ColorSpace` encoding for both a unit variant (`device_cmyk`)
+  `presslint-types::ColorSpace` encoding for both a unit variant (`device_cmyk`)
   and the `Resource(PdfName)` newtype variant. DeviceLink tests live in
   `src/tests/devicelink.rs`, spot resolution tests in `src/tests/spot.rs`, and
   overprint resolution tests in `src/tests/overprint.rs`; the dependency-free

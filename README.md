@@ -33,7 +33,8 @@ automation prompts, and commercial strategy live outside the public repository.
 ## Workspace
 
 ```text
-crates/presslint-core        Shared public data types.
+crates/presslint             Umbrella crate; re-exports all of the below.
+crates/presslint-types       Shared public data types.
 crates/presslint-pdf         Structural PDF access and write seams.
 crates/presslint-syntax      Content stream tokenization and serialization.
 crates/presslint-inventory   Page object inventory model.

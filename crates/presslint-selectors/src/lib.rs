@@ -2,8 +2,8 @@
 
 #![forbid(unsafe_code)]
 
-use presslint_core::{ColorSpace, ColorUsage, ContentScope, ObjectKind, PageIndex};
 use presslint_inventory::InventoryEntry;
+use presslint_types::{ColorSpace, ColorUsage, ContentScope, ObjectKind, PageIndex};
 use serde::{Deserialize, Serialize};
 
 /// Boolean selector expression.
@@ -58,7 +58,7 @@ pub enum Predicate {
     /// Match entries that advertise an edit capability.
     Editable {
         /// Required edit capability.
-        capability: presslint_core::EditCapability,
+        capability: presslint_types::EditCapability,
     },
     /// Match entries discovered in a specific content scope.
     Scope {

@@ -1,4 +1,4 @@
-use presslint_core::ByteRange;
+use presslint_types::ByteRange;
 use serde::{Deserialize, Serialize};
 
 /// Lexical token with source byte range.

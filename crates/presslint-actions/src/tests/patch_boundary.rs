@@ -1,4 +1,4 @@
-use presslint_core::{ByteRange, ContentScope, EditCapability, ObjectKind, PageIndex};
+use presslint_types::{ByteRange, ContentScope, EditCapability, ObjectKind, PageIndex};
 
 use super::super::{Action, MutationBoundary, PlannedPatch};
 use super::*;
