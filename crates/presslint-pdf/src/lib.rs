@@ -40,6 +40,7 @@ mod trailer;
 mod trailer_root;
 mod xref_resolve;
 mod xref_section;
+mod xref_stream;
 
 #[cfg(test)]
 mod tests;
@@ -165,6 +166,10 @@ pub use trailer_root::{
 };
 pub use xref_resolve::{
     ClassicXrefAmbiguousObjectEntry, ClassicXrefObjectLocation, resolve_classic_xref_object,
+};
+pub use xref_stream::{
+    XrefStreamDictionaryInspection, XrefStreamDictionaryInspectionError,
+    XrefStreamDictionaryInspectionRejection, XrefStreamSubsection, inspect_xref_stream_dictionary,
 };
 
 /// Parsed metadata for a classic cross-reference table.
