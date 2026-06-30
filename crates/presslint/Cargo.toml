@@ -15,6 +15,10 @@ presslint-inventory.workspace = true
 presslint-selectors.workspace = true
 presslint-actions.workspace = true
 presslint-color.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+miniz_oxide.workspace = true
 
 [lints]
 workspace = true

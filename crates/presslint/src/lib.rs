@@ -14,7 +14,15 @@
 //! presslint::color       // color policy and transform planning
 //! ```
 
+mod document_inventory;
+
 pub use presslint_types::*;
+
+pub use document_inventory::{
+    ClassicPdfInventory, ClassicPdfInventoryError, ClassicPdfInventoryPage,
+    ClassicPdfInventoryPageResult, ClassicPdfInventoryRejection, ClassicPdfInventorySkip,
+    build_classic_pdf_inventory,
+};
 
 pub use presslint_actions as actions;
 pub use presslint_color as color;
@@ -22,3 +30,6 @@ pub use presslint_inventory as inventory;
 pub use presslint_pdf as pdf;
 pub use presslint_selectors as selectors;
 pub use presslint_syntax as syntax;
+
+#[cfg(test)]
+mod tests;
