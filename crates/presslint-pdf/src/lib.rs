@@ -13,6 +13,7 @@ mod array_extent;
 mod catalog_pages;
 mod classic_xref;
 mod content_stream_extent;
+mod content_stream_filter;
 mod content_stream_slice;
 mod dictionary_entries;
 mod dictionary_extent;
@@ -61,6 +62,10 @@ pub use classic_xref::inspect_classic_xref_table;
 pub use content_stream_extent::{
     ContentStreamDataExtentInspection, ContentStreamDataExtentInspectionError,
     ContentStreamDataExtentInspectionRejection, inspect_content_stream_data_extent,
+};
+pub use content_stream_filter::{
+    ContentStreamFilterClassification, ContentStreamFilterClassificationError,
+    ContentStreamFilterClassificationRejection, classify_content_stream_filter,
 };
 pub use content_stream_slice::{
     ContentStreamDataSliceError, ContentStreamDataSliceRejection, content_stream_data_slice,

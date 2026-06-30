@@ -242,6 +242,45 @@ Older accumulated journal history lives in [JOURNAL-archive.md](JOURNAL-archive.
   decoding, content tokenization, or inventory building, no whole-document object
   map or cache, no document opener, and no PDF byte mutation or writer work.
 
+### T093 - Classify Content Stream Filter Chains
+
+- Adds `classify_content_stream_filter(input, object_offset)`, a public
+  decode-path classifier for dictionary-bodied content stream objects. It
+  delegates object/dictionary/`stream` validation to
+  `inspect_content_stream_start`, then inspects only the delegated top-level
+  dictionary entries for the exact raw `/Filter` key.
+- The success classification is intentionally small: `Uncompressed` for a
+  missing `/Filter` or empty filter array, `Flate` for exactly one
+  `/FlateDecode` filter, `UnsupportedFilter { filter_name_range }` for one
+  non-Flate name, and `UnsupportedFilterChain { filter_value_range,
+  filter_count }` for arrays with two or more name filters. Unsupported filters
+  are structured skip results, not errors.
+- Malformed structure is reported through
+  `ContentStreamFilterClassificationError` with distinct rejection variants for
+  delegated stream-start failure, duplicate `/Filter`, non-name/non-array filter
+  values, malformed filter arrays, and non-name array elements. A malformed
+  top-level `/Filter [` discovered during delegated dictionary entry inspection
+  is remapped to the classifier's `MalformedFilterArray` rejection while
+  unrelated stream-start failures remain delegated `StreamStart` failures.
+  Indirect reference-like `/Filter` values remain a non-name/non-array
+  rejection; this slice does not resolve them.
+- The helper retains or copies no PDF bytes, object bodies, stream bodies,
+  decoded bytes, filter names, or source slices. Reports carry only byte ranges,
+  small counts, and enums; `/FlateDecode` is matched by comparing the caller's
+  source range in place, preserving the zero-copy dispatch lesson from the
+  earlier filter/decode work.
+- Tests cover the no-filter identity path, single name filters, single-element
+  arrays, empty arrays, multi-filter chains, duplicate keys, malformed value
+  kinds, non-name array elements, serde shape, and composition from
+  `inspect_classic_document_access`/page-content resolution to a resolved Flate
+  content stream.
+- Non-goals for this slice: no `/DecodeParms` or `/DP` parsing, no stream-body
+  decode/inflate/decompress work, no content tokenization or assembly, no
+  additional supported filters beyond classifying them as unsupported skips, no
+  indirect `/Filter` resolution, and no inventory, selector, action, patch
+  writer, filesystem I/O, document opener, cache, or whole-document eager
+  parsing work.
+
 ## Follow-Ups
 
 - Next C slice: locate xref-stream data extents, resolve `/Length`, and wire

@@ -195,6 +195,52 @@ pub fn inspect_dictionary_entries(
     })
 }
 
+pub fn top_level_array_extent_error_for_key(
+    input: &[u8],
+    byte_offset: usize,
+    key: &[u8],
+) -> Option<(ArrayExtentInspectionRejection, Option<usize>)> {
+    let dictionary = crate::inspect_dictionary_extent(input, byte_offset).ok()?;
+    let mut cursor = dictionary.open_byte_offset + 2;
+    let body_end = dictionary.close_byte_offset;
+
+    loop {
+        cursor = skip_whitespace_and_comments(input, cursor, body_end);
+        if cursor >= body_end {
+            return None;
+        }
+
+        if input[cursor] != b'/' {
+            return None;
+        }
+
+        let key_start = cursor;
+        cursor = skip_name(input, cursor, body_end);
+        let key_end = cursor;
+
+        cursor = skip_whitespace_and_comments(input, cursor, body_end);
+        if cursor >= body_end {
+            return None;
+        }
+
+        if input.get(key_start..key_end) == Some(key) && input[cursor] == b'[' {
+            return crate::inspect_array_extent(input, cursor)
+                .err()
+                .map(|error| (error.reason, error.error_byte_offset));
+        }
+
+        let value = scan_value(
+            input,
+            cursor,
+            body_end,
+            byte_offset,
+            dictionary.open_byte_offset,
+        )
+        .ok()?;
+        cursor = value.range.end;
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ScannedValue {
     range: DictionaryEntryByteRange,
