@@ -11,12 +11,13 @@ use presslint_syntax::{TokenKind, serialize_unmodified, tokenize};
 
 use crate::{
     ContentStreamDataExtentInspection, ContentStreamDataSliceRejection,
-    DocumentPageContentExtentResult, DocumentPageContentExtentsInspection,
-    PageContentExtentInspection, content_stream_data_slice, inspect_catalog_pages,
-    inspect_classic_xref_table, inspect_classic_xref_trailer_root,
+    DocumentPageContentExtentResult, DocumentPageContentExtentsInspection, FlateDecodeParameters,
+    PageContentExtentInspection, content_stream_data_slice, decode_flate_stream,
+    inspect_catalog_pages, inspect_classic_xref_table, inspect_classic_xref_trailer_root,
     inspect_content_stream_data_extent, inspect_document_page_content_extents,
     inspect_page_tree_reference_target,
 };
+use miniz_oxide::deflate::compress_to_vec_zlib;
 
 const PDF_PREFIX: &[u8] = b"%PDF-1.7\n";
 
@@ -62,6 +63,44 @@ fn single_content_stream_pdf(content_data: &[u8]) -> Vec<u8> {
         format!("trailer\n<< /Size 5 /Root 1 0 R >>\nstartxref\n{xref_offset}\n%%EOF\n").as_bytes(),
     );
     source
+}
+
+/// Build a synthetic single-content-stream PDF whose content stream uses a
+/// single `/FlateDecode` filter.
+fn single_flate_content_stream_pdf(decoded_content: &[u8]) -> (Vec<u8>, Vec<u8>) {
+    let compressed = compress_to_vec_zlib(decoded_content, 6);
+    let catalog = b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n";
+    let pages = b"2 0 obj\n<< /Type /Pages /Kids [ 3 0 R ] /Count 1 >>\nendobj\n";
+    let page = b"3 0 obj\n<< /Type /Page /Parent 2 0 R /Contents 4 0 R >>\nendobj\n";
+
+    let mut content = Vec::new();
+    content.extend_from_slice(b"4 0 obj\n<< /Length ");
+    content.extend_from_slice(compressed.len().to_string().as_bytes());
+    content.extend_from_slice(b" /Filter /FlateDecode >>\nstream\n");
+    content.extend_from_slice(&compressed);
+    content.extend_from_slice(b"\nendstream\nendobj\n");
+
+    let mut source = Vec::new();
+    source.extend_from_slice(PDF_PREFIX);
+    let catalog_offset = source.len();
+    source.extend_from_slice(catalog);
+    let pages_offset = source.len();
+    source.extend_from_slice(pages);
+    let page_offset = source.len();
+    source.extend_from_slice(page);
+    let content_offset = source.len();
+    source.extend_from_slice(&content);
+
+    let xref_offset = source.len();
+    source.extend_from_slice(b"xref\n0 5\n");
+    source.extend_from_slice(b"0000000000 65535 f \n");
+    for offset in [catalog_offset, pages_offset, page_offset, content_offset] {
+        source.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    source.extend_from_slice(
+        format!("trailer\n<< /Size 5 /Root 1 0 R >>\nstartxref\n{xref_offset}\n%%EOF\n").as_bytes(),
+    );
+    (source, compressed)
 }
 
 /// Inspect a direct-length content-stream extent for an object placed right
@@ -206,4 +245,40 @@ fn bridges_located_extent_to_tokenizable_content_stream() {
         operators.contains(&&b"rg"[..]),
         "fill-color operator present"
     );
+}
+
+#[test]
+fn bridges_located_flate_extent_to_decoded_tokenizable_content_stream() {
+    let content_data = b"q\n0 0 1 rg\n12 12 80 80 re\nf\nQ";
+    let (source, compressed) = single_flate_content_stream_pdf(content_data);
+
+    let xref_offset = source
+        .windows(b"xref".len())
+        .position(|window| window == b"xref")
+        .expect("classic xref keyword present");
+    let xref = inspect_classic_xref_table(&source, xref_offset).expect("xref table should inspect");
+    let root = inspect_classic_xref_trailer_root(&source, xref.trailer_byte_offset)
+        .expect("trailer /Root should inspect");
+    let catalog = inspect_page_tree_reference_target(&source, &xref, root.root_reference)
+        .expect("catalog should resolve");
+    let catalog_pages = inspect_catalog_pages(&source, catalog.object_byte_offset)
+        .expect("catalog /Pages should inspect");
+    let pages = inspect_page_tree_reference_target(&source, &xref, catalog_pages.pages_reference)
+        .expect("page tree root should resolve");
+    let report = inspect_document_page_content_extents(&source, &xref, pages.object_byte_offset)
+        .expect("document page content extents should inspect");
+
+    let extent = first_located_extent(&report).expect("first page extent should be located");
+    let slice = content_stream_data_slice(&source, extent).expect("located extent should bridge");
+    assert_eq!(slice, compressed);
+
+    let decoded = decode_flate_stream(slice, FlateDecodeParameters::default(), 1024)
+        .expect("compressed content stream should decode");
+    let tokens = tokenize(&decoded).expect("decoded content stream should tokenize");
+
+    assert_eq!(decoded, content_data);
+    assert_eq!(serialize_unmodified(&decoded), decoded);
+    assert!(tokens.iter().any(|token| {
+        token.kind == TokenKind::Operator && token.source_bytes(&decoded) == Some(&b"rg"[..])
+    }));
 }

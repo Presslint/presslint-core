@@ -743,3 +743,22 @@
   decoding, and `/Prev` incremental chains remain deferred.
 - Use the ownership decision model before future write planning mutates any
   indirect object that may be referenced by more than one consumer.
+# T088 - Bounded FlateDecode Stream Decoding
+
+- Added a focused `/FlateDecode` stream helper that accepts borrowed compressed
+  bytes plus explicit decode parameters and returns bounded owned decoded
+  bytes for downstream tokenizer/inventory consumers.
+- The helper uses pinned `miniz_oxide =0.9.1` with default features disabled
+  and only the allocation feature enabled. Inflate uses the zlib-wrapped
+  bounded API, so over-limit output becomes a structured rejection instead of
+  unbounded allocation.
+- Supported predictor cases are no predictor / `/Predictor 1`, TIFF Predictor
+  2, and PNG predictors 10-15. Predictor failures are explicit for unsupported
+  predictors, malformed parameters, row geometry mismatches, integer overflow,
+  and unknown PNG filter bytes.
+- The owned decoded buffer is intentional at this seam: decompression creates a
+  new byte stream. Predictor reversal avoids an additional decoded copy; PNG
+  rows are compacted in place after filter reversal.
+- Non-goals remain unchanged: no xref streams, no filter arrays or chained
+  filters, no additional PDF filters, no recompression or mutation, no object
+  maps/caches/document opener, and no inventory/action/color work.

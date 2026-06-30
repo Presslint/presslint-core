@@ -8,6 +8,7 @@ license.workspace = true
 description = "Structural PDF access interfaces for presslint-core."
 
 [dependencies]
+miniz_oxide.workspace = true
 serde.workspace = true
 
 [dev-dependencies]

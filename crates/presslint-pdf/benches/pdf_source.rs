@@ -1,7 +1,8 @@
 #![allow(missing_docs)]
 
 use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
-use presslint_pdf::inspect_classic_xref_table;
+use miniz_oxide::deflate::compress_to_vec_zlib;
+use presslint_pdf::{FlateDecodeParameters, decode_flate_stream, inspect_classic_xref_table};
 
 fn synthetic_xref_table(entries: u32) -> Vec<u8> {
     let mut source = Vec::new();
@@ -60,5 +61,34 @@ fn classic_xref_table_throughput(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, classic_xref_table_throughput);
+fn flate_decode_throughput(c: &mut Criterion) {
+    let decoded = b"q\n0 0 1 rg\n12 12 80 80 re\nf\nQ\n".repeat(256);
+    let compressed = compress_to_vec_zlib(&decoded, 6);
+
+    let mut group = c.benchmark_group("pdf_source/decode_flate_stream");
+    group.throughput(Throughput::Bytes(throughput_count(decoded.len())));
+    group.bench_with_input(
+        BenchmarkId::from_parameter("small_content_stream_decoded_bytes"),
+        &compressed,
+        |b, input| {
+            b.iter(|| {
+                require_ok(
+                    decode_flate_stream(
+                        black_box(input),
+                        FlateDecodeParameters::default(),
+                        decoded.len(),
+                    ),
+                    "synthetic FlateDecode stream decodes",
+                )
+            });
+        },
+    );
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    classic_xref_table_throughput,
+    flate_decode_throughput
+);
 criterion_main!(benches);

@@ -24,6 +24,7 @@ mod page_tree_node;
 mod page_tree_node_type;
 mod page_tree_reference;
 mod source;
+mod stream_decode;
 mod trailer;
 mod trailer_root;
 

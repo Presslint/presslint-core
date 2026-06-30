@@ -35,6 +35,7 @@ mod page_tree_reference;
 mod source;
 mod source_utils;
 mod startxref;
+mod stream_decode;
 mod trailer;
 mod trailer_root;
 mod xref_resolve;
@@ -150,6 +151,9 @@ pub use source::{
     PdfSourceInspectionError, PdfSourceRejection, PdfStartXref, PdfStartXrefIssue, PdfVersion,
     PdfXrefSectionIssue, STARTXREF_SCAN_LIMIT, XREF_SECTION_SCAN_LIMIT, XrefSection,
     inspect_pdf_source,
+};
+pub use stream_decode::{
+    FlateDecodeParameters, FlateDecodeStreamError, FlateDecodeStreamRejection, decode_flate_stream,
 };
 pub use trailer::{
     ClassicXrefTrailerDictionaryInspection, ClassicXrefTrailerDictionaryInspectionError,
