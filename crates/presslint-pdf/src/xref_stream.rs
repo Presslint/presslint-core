@@ -561,7 +561,7 @@ fn scan_integer_array(input: &[u8], value_start: usize) -> Result<Vec<usize>, In
 }
 
 /// Failure reason for [`parse_non_negative_integer`].
-enum IntegerError {
+pub enum IntegerError {
     /// The bytes are empty or are not all ASCII digits.
     Malformed,
     /// The non-negative integer does not fit `usize`.
@@ -569,7 +569,11 @@ enum IntegerError {
 }
 
 /// Parse a value span as a pure non-negative decimal integer.
-fn parse_non_negative_integer(bytes: &[u8]) -> Result<usize, IntegerError> {
+///
+/// Shared with the cross-reference-stream trailer inspector so its `/Prev` byte
+/// offset is parsed with the same non-negative-decimal-integer-fitting-`usize`
+/// rule this module applies to `/Size`.
+pub fn parse_non_negative_integer(bytes: &[u8]) -> Result<usize, IntegerError> {
     if bytes.is_empty() || !bytes.iter().all(u8::is_ascii_digit) {
         return Err(IntegerError::Malformed);
     }
@@ -580,7 +584,11 @@ fn parse_non_negative_integer(bytes: &[u8]) -> Result<usize, IntegerError> {
 ///
 /// Returns `Ok(Some(entry))` for exactly one match, `Ok(None)` for zero, and
 /// `Err((first_key_range, duplicate_key_range))` when more than one matches.
-fn unique_entry(
+///
+/// Shared with the cross-reference-stream trailer inspector so it matches
+/// `/Root` and `/Prev` with the same exact-key, missing/duplicate semantics this
+/// module uses for the geometry fields.
+pub fn unique_entry(
     input: &[u8],
     entries: &[DictionaryEntrySpan],
     key: &[u8],

@@ -102,8 +102,60 @@ Older accumulated journal history lives in [JOURNAL-archive.md](JOURNAL-archive.
   tests, the full `presslint-pdf` suite, `cargo check --workspace --all-targets`,
   clippy, and `./scripts/ci_check.sh` pass unchanged.
 
+### T090 - Inspect Cross-Reference Stream Trailer Navigation Fields
+
+- Adds `inspect_xref_stream_trailer(input, object_byte_offset)`, the next
+  cross-reference-stream slice. Given caller bytes and the byte offset of an
+  xref-stream indirect object (the offset `classify_xref_section` reports as
+  `XrefSection::Stream`), it reads the trailer-style navigation fields that let
+  the structural path continue from an xref stream: `/Root` (the catalog) and
+  optional `/Prev` (the previous cross-reference byte offset).
+- It delegates `/Type /XRef`, `/W`, `/Size`, and `/Index` geometry validation to
+  `inspect_xref_stream_dictionary`, reimplementing none of it, and scans only the
+  exact raw top-level keys `/Root` and `/Prev` over the entries that geometry
+  inspection already materialized (via `inspect_indirect_object_dictionary`). The
+  exact-key, missing/duplicate semantics reuse the shared `unique_entry` helper
+  from `xref_stream`, and the `/Prev` byte offset reuses the same
+  `parse_non_negative_integer` helper that module applies to `/Size` (both `pub`,
+  crate-internal because the module is private).
+- `/Root` is required and must be exactly one top-level `N G R` indirect
+  reference that covers its entire value span, parsed with
+  `parse_indirect_reference`; it is reported as an `IndirectRef` plus its key and
+  value byte ranges. Missing, duplicate, non-reference (name/number/dict/array),
+  and malformed-reference (`obj` keyword or trailing scalar) cases are distinct
+  rejections (`MissingRoot`, `DuplicateRoot`, `NonReferenceRootValue`,
+  `MalformedRootReference`).
+- `/Prev` is optional and must be at most one top-level direct non-negative
+  decimal-integer byte offset that fits `usize`, reported with its value byte
+  range and parsed `prev_byte_offset` when present. Duplicate, non-integer
+  (indirect reference, decimal, signed, name, array, dictionary), and
+  integer-overflow cases are distinct rejections (`DuplicatePrev`,
+  `NonIntegerPrevValue`, `PrevOutOfRange`); when `/Prev` is absent both report
+  fields are `None`.
+- `XrefStreamTrailerInspection` carries the delegated
+  `XrefStreamDictionaryInspection`, the `/Root` key/value byte ranges and parsed
+  `root_reference`, and the optional `/Prev` value byte range and parsed
+  `prev_byte_offset`. It retains or copies no PDF bytes, object bodies, stream
+  bodies, or source slices; its only owned data are the delegated inspection's
+  bounded vectors, byte ranges, an `IndirectRef`, and small `usize` values, so no
+  benchmark was added. Every failure path is a distinct structured rejection and
+  the helper never returns partial navigation fields on error.
+- It lives in the new focused `xref_stream_trailer.rs` module, re-exported from
+  `lib.rs`; tests live in `src/tests/xref_stream_trailer.rs` and cover `/Root`
+  success, `/Root` + `/Prev` success, missing/duplicate/non-reference/malformed
+  `/Root`, duplicate/non-integer/overflow `/Prev`, delegated-geometry-failure
+  propagation, a `inspect_startxref -> classify_xref_section
+  (== XrefSection::Stream) -> inspect_xref_stream_trailer` composition case, a
+  no-retained-bytes check, and a serde round-trip pinning the report and
+  rejection JSON shape.
+- Non-goals for this slice: no cross-reference stream body decoding or
+  entry-record parsing, no `/W`-width record slicing or object-offset map, no
+  `/Prev` following, incremental-section merging, or hybrid-reference
+  (`/XRefStm`) support, no `/Root` resolution or catalog/page-tree traversal, and
+  no filesystem I/O, document opener, caches, or whole-document eager parsing.
+
 ## Follow-Ups
 
-- Next C slices: parse `/Root`/`/Prev` from the xref-stream dictionary, then
-  decode the stream body (via the T088 FlateDecode helper) and slice it into
-  `/W`-width entry records over the `/Index` subsections.
+- Next C slice: decode the xref-stream body (via the T088 FlateDecode helper) and
+  slice it into `/W`-width entry records over the `/Index` subsections, then
+  resolve `/Root` and follow the `/Prev` chain to merge incremental sections.

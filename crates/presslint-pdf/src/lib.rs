@@ -41,6 +41,7 @@ mod trailer_root;
 mod xref_resolve;
 mod xref_section;
 mod xref_stream;
+mod xref_stream_trailer;
 
 #[cfg(test)]
 mod tests;
@@ -170,6 +171,10 @@ pub use xref_resolve::{
 pub use xref_stream::{
     XrefStreamDictionaryInspection, XrefStreamDictionaryInspectionError,
     XrefStreamDictionaryInspectionRejection, XrefStreamSubsection, inspect_xref_stream_dictionary,
+};
+pub use xref_stream_trailer::{
+    XrefStreamTrailerInspection, XrefStreamTrailerInspectionError,
+    XrefStreamTrailerInspectionRejection, inspect_xref_stream_trailer,
 };
 
 /// Parsed metadata for a classic cross-reference table.

@@ -28,6 +28,7 @@ mod stream_decode;
 mod trailer;
 mod trailer_root;
 mod xref_stream;
+mod xref_stream_trailer;
 
 use super::{
     ClassicXrefAmbiguousObjectEntry, ClassicXrefEntry, ClassicXrefEntryState,
