@@ -3,6 +3,7 @@
 mod array_extent;
 mod catalog_pages;
 mod classic_xref;
+mod content_stream_bridge;
 mod content_stream_extent;
 mod dictionary_entries;
 mod dictionary_extent;

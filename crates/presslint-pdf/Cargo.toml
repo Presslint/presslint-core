@@ -12,6 +12,7 @@ serde.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true
+presslint-syntax.workspace = true
 
 [[bench]]
 name = "pdf_source"
