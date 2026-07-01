@@ -229,14 +229,16 @@ pub fn build_classic_pdf_inventory(
     let mut inventory = Inventory::default();
     let mut pages = Vec::with_capacity(extents.pages.len());
     for page in &extents.pages {
-        let page_index = page_index(input, page.ordinal)?;
-        let result = match page_inventory(input, page, page_index, max_decoded_stream_bytes) {
+        let page_index = page_index_error(input, page.ordinal)?;
+        let result = match build_page_inventory(input, page, page_index, max_decoded_stream_bytes) {
             Ok(page_inv) => {
                 let entry_count = page_inv.len();
                 inventory.entries.extend(page_inv.entries);
                 ClassicPdfInventoryPageResult::Inventoried { entry_count }
             }
-            Err(reason) => ClassicPdfInventoryPageResult::Skipped { reason },
+            Err(reason) => ClassicPdfInventoryPageResult::Skipped {
+                reason: reason.into(),
+            },
         };
         pages.push(ClassicPdfInventoryPage { page_index, result });
     }
@@ -248,26 +250,26 @@ pub fn build_classic_pdf_inventory(
     })
 }
 
-fn page_inventory(
+pub fn build_page_inventory(
     input: &[u8],
     page: &DocumentPageContentExtentInspection,
     page_index: PageIndex,
     max_decoded_stream_bytes: usize,
-) -> Result<Inventory, ClassicPdfInventorySkip> {
+) -> Result<Inventory, InventoryPageSkip> {
     let extents = match &page.result {
         DocumentPageContentExtentResult::Inspected { extents, .. } => extents,
         DocumentPageContentExtentResult::ContentsFailed { error } => {
-            return Err(ClassicPdfInventorySkip::ContentsFailed {
+            return Err(InventoryPageSkip::ContentsFailed {
                 error: error.clone(),
             });
         }
     };
 
     if extents.entries.is_empty() {
-        return Err(ClassicPdfInventorySkip::NoContentStreams);
+        return Err(InventoryPageSkip::NoContentStreams);
     }
     if extents.entries.len() > 1 {
-        return Err(ClassicPdfInventorySkip::MultipleContentStreams {
+        return Err(InventoryPageSkip::MultipleContentStreams {
             stream_count: extents.entries.len(),
         });
     }
@@ -279,7 +281,7 @@ fn page_inventory(
             ..
         } => (*object_byte_offset, extent),
         PageContentExtentInspection::Skipped { reason, .. } => {
-            return Err(ClassicPdfInventorySkip::TargetSkipped {
+            return Err(InventoryPageSkip::TargetSkipped {
                 reason: reason.clone(),
             });
         }
@@ -288,7 +290,7 @@ fn page_inventory(
             error,
             ..
         } => {
-            return Err(ClassicPdfInventorySkip::ExtentFailed {
+            return Err(InventoryPageSkip::ExtentFailed {
                 object_byte_offset: *object_byte_offset,
                 error: error.clone(),
             });
@@ -297,12 +299,12 @@ fn page_inventory(
 
     let content = decode_content(input, stream.0, stream.1, max_decoded_stream_bytes)?;
     let source = content.as_slice();
-    let tokens = tokenize(source).map_err(|error| ClassicPdfInventorySkip::TokenizeFailed {
+    let tokens = tokenize(source).map_err(|error| InventoryPageSkip::TokenizeFailed {
         object_byte_offset: stream.0,
         error,
     })?;
     let assembled =
-        assemble_operators(&tokens).map_err(|error| ClassicPdfInventorySkip::AssembleFailed {
+        assemble_operators(&tokens).map_err(|error| InventoryPageSkip::AssembleFailed {
             object_byte_offset: stream.0,
             error,
         })?;
@@ -314,7 +316,7 @@ fn page_inventory(
         &[],
         &[],
     )
-    .map_err(|error| ClassicPdfInventorySkip::GraphicsWalkFailed {
+    .map_err(|error| InventoryPageSkip::GraphicsWalkFailed {
         object_byte_offset: stream.0,
         error,
     })?;
@@ -341,16 +343,16 @@ fn decode_content<'input>(
     object_byte_offset: usize,
     extent: &presslint_pdf::ContentStreamDataExtentInspection,
     max_decoded_stream_bytes: usize,
-) -> Result<ContentBytes<'input>, ClassicPdfInventorySkip> {
+) -> Result<ContentBytes<'input>, InventoryPageSkip> {
     let stream_data = content_stream_data_slice(input, extent).map_err(|error| {
-        ClassicPdfInventorySkip::SliceFailed {
+        InventoryPageSkip::SliceFailed {
             object_byte_offset,
             error,
         }
     })?;
 
     match classify_content_stream_filter(input, object_byte_offset).map_err(|error| {
-        ClassicPdfInventorySkip::FilterClassificationFailed {
+        InventoryPageSkip::FilterClassificationFailed {
             object_byte_offset,
             error,
         }
@@ -359,19 +361,19 @@ fn decode_content<'input>(
         ContentStreamFilterClassification::Flate => {
             let resolution =
                 resolve_flate_decode_parameters(input, object_byte_offset).map_err(|error| {
-                    ClassicPdfInventorySkip::DecodeParmsFailed {
+                    InventoryPageSkip::DecodeParmsFailed {
                         object_byte_offset,
                         error,
                     }
                 })?;
             let FlateDecodeParametersResolution::Resolved { parameters, .. } = resolution else {
-                return Err(ClassicPdfInventorySkip::UnsupportedDecodeParms {
+                return Err(InventoryPageSkip::UnsupportedDecodeParms {
                     object_byte_offset,
                     resolution,
                 });
             };
             let decoded = decode_flate_stream(stream_data, parameters, max_decoded_stream_bytes)
-                .map_err(|error| ClassicPdfInventorySkip::DecodeFailed {
+                .map_err(|error| InventoryPageSkip::DecodeFailed {
                     object_byte_offset,
                     error,
                 })?;
@@ -379,7 +381,7 @@ fn decode_content<'input>(
         }
         classification @ (ContentStreamFilterClassification::UnsupportedFilter { .. }
         | ContentStreamFilterClassification::UnsupportedFilterChain { .. }) => {
-            Err(ClassicPdfInventorySkip::UnsupportedFilter {
+            Err(InventoryPageSkip::UnsupportedFilter {
                 object_byte_offset,
                 classification,
             })
@@ -387,14 +389,154 @@ fn decode_content<'input>(
     }
 }
 
-fn page_index(input: &[u8], ordinal: usize) -> Result<PageIndex, ClassicPdfInventoryError> {
-    let page = u32::try_from(ordinal).map_err(|_| {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InventoryPageSkip {
+    ContentsFailed {
+        error: presslint_pdf::PageContentsInspectionError,
+    },
+    NoContentStreams,
+    MultipleContentStreams {
+        stream_count: usize,
+    },
+    TargetSkipped {
+        reason: SkippedPageContentTargetReason,
+    },
+    ExtentFailed {
+        object_byte_offset: usize,
+        error: ContentStreamDataExtentInspectionError,
+    },
+    SliceFailed {
+        object_byte_offset: usize,
+        error: ContentStreamDataSliceError,
+    },
+    FilterClassificationFailed {
+        object_byte_offset: usize,
+        error: ContentStreamFilterClassificationError,
+    },
+    UnsupportedFilter {
+        object_byte_offset: usize,
+        classification: ContentStreamFilterClassification,
+    },
+    DecodeParmsFailed {
+        object_byte_offset: usize,
+        error: FlateDecodeParametersResolutionError,
+    },
+    UnsupportedDecodeParms {
+        object_byte_offset: usize,
+        resolution: FlateDecodeParametersResolution,
+    },
+    DecodeFailed {
+        object_byte_offset: usize,
+        error: FlateDecodeStreamError,
+    },
+    TokenizeFailed {
+        object_byte_offset: usize,
+        error: TokenizeError,
+    },
+    AssembleFailed {
+        object_byte_offset: usize,
+        error: AssembleError,
+    },
+    GraphicsWalkFailed {
+        object_byte_offset: usize,
+        error: GraphicsWalkError,
+    },
+}
+
+impl From<InventoryPageSkip> for ClassicPdfInventorySkip {
+    fn from(skip: InventoryPageSkip) -> Self {
+        match skip {
+            InventoryPageSkip::ContentsFailed { error } => Self::ContentsFailed { error },
+            InventoryPageSkip::NoContentStreams => Self::NoContentStreams,
+            InventoryPageSkip::MultipleContentStreams { stream_count } => {
+                Self::MultipleContentStreams { stream_count }
+            }
+            InventoryPageSkip::TargetSkipped { reason } => Self::TargetSkipped { reason },
+            InventoryPageSkip::ExtentFailed {
+                object_byte_offset,
+                error,
+            } => Self::ExtentFailed {
+                object_byte_offset,
+                error,
+            },
+            InventoryPageSkip::SliceFailed {
+                object_byte_offset,
+                error,
+            } => Self::SliceFailed {
+                object_byte_offset,
+                error,
+            },
+            InventoryPageSkip::FilterClassificationFailed {
+                object_byte_offset,
+                error,
+            } => Self::FilterClassificationFailed {
+                object_byte_offset,
+                error,
+            },
+            InventoryPageSkip::UnsupportedFilter {
+                object_byte_offset,
+                classification,
+            } => Self::UnsupportedFilter {
+                object_byte_offset,
+                classification,
+            },
+            InventoryPageSkip::DecodeParmsFailed {
+                object_byte_offset,
+                error,
+            } => Self::DecodeParmsFailed {
+                object_byte_offset,
+                error,
+            },
+            InventoryPageSkip::UnsupportedDecodeParms {
+                object_byte_offset,
+                resolution,
+            } => Self::UnsupportedDecodeParms {
+                object_byte_offset,
+                resolution,
+            },
+            InventoryPageSkip::DecodeFailed {
+                object_byte_offset,
+                error,
+            } => Self::DecodeFailed {
+                object_byte_offset,
+                error,
+            },
+            InventoryPageSkip::TokenizeFailed {
+                object_byte_offset,
+                error,
+            } => Self::TokenizeFailed {
+                object_byte_offset,
+                error,
+            },
+            InventoryPageSkip::AssembleFailed {
+                object_byte_offset,
+                error,
+            } => Self::AssembleFailed {
+                object_byte_offset,
+                error,
+            },
+            InventoryPageSkip::GraphicsWalkFailed {
+                object_byte_offset,
+                error,
+            } => Self::GraphicsWalkFailed {
+                object_byte_offset,
+                error,
+            },
+        }
+    }
+}
+
+pub fn page_index(ordinal: usize) -> Result<PageIndex, usize> {
+    u32::try_from(ordinal).map(PageIndex).map_err(|_| ordinal)
+}
+
+fn page_index_error(input: &[u8], ordinal: usize) -> Result<PageIndex, ClassicPdfInventoryError> {
+    page_index(ordinal).map_err(|ordinal| {
         inventory_error(
             input,
             ClassicPdfInventoryRejection::PageIndexOutOfRange { ordinal },
         )
-    })?;
-    Ok(PageIndex(page))
+    })
 }
 
 const fn inventory_error(

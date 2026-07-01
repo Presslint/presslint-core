@@ -15,6 +15,7 @@
 //! ```
 
 mod document_inventory;
+mod pdf_inventory;
 
 pub use presslint_types::*;
 
@@ -22,6 +23,10 @@ pub use document_inventory::{
     ClassicPdfInventory, ClassicPdfInventoryError, ClassicPdfInventoryPage,
     ClassicPdfInventoryPageResult, ClassicPdfInventoryRejection, ClassicPdfInventorySkip,
     build_classic_pdf_inventory,
+};
+pub use pdf_inventory::{
+    PdfInventory, PdfInventoryError, PdfInventoryPage, PdfInventoryPageResult,
+    PdfInventoryRejection, PdfInventorySkip, build_pdf_inventory,
 };
 
 pub use presslint_actions as actions;

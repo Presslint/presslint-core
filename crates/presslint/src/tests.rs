@@ -5,6 +5,8 @@ use crate::{
     build_classic_pdf_inventory,
 };
 
+mod pdf_inventory;
+
 fn single_page_pdf(content_dict_suffix: &[u8], content_data: &[u8]) -> Vec<u8> {
     let catalog = b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n";
     let pages = b"2 0 obj\n<< /Type /Pages /Kids [ 3 0 R ] /Count 1 >>\nendobj\n";
