@@ -2,9 +2,123 @@ use crate::{
     ClassicXrefObjectLocation, DictionaryEntryInspectionRejection, DictionaryValueKind,
     IndirectObjectBodyLeadingTokenKind, IndirectObjectBodyTokenInspectionRejection,
     IndirectObjectDictionaryInspectionRejection, IndirectObjectHeaderInspectionRejection,
-    IndirectRef, inspect_classic_xref_table, inspect_indirect_object_dictionary,
-    resolve_classic_xref_object,
+    IndirectRef, ResolvedObject, ResolvedObjectData, ResolvedObjectDictionaryInspection,
+    ResolvedObjectDictionaryInspectionRejection, inspect_classic_xref_table,
+    inspect_indirect_object_dictionary, inspect_object_dictionary, resolve_classic_xref_object,
 };
+
+fn uncompressed(object_byte_offset: usize, object_number: u32) -> ResolvedObjectData {
+    ResolvedObjectData::Uncompressed {
+        resolved: ResolvedObject {
+            reference: IndirectRef {
+                object_number,
+                generation: 0,
+            },
+            object_byte_offset,
+            xref_generation: 0,
+        },
+    }
+}
+
+#[test]
+fn inspect_object_dictionary_delegates_for_uncompressed_objects() {
+    let source = b"3 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n";
+
+    let inspection = inspect_object_dictionary(source, &uncompressed(0, 3))
+        .expect("uncompressed object dictionary should inspect");
+
+    let ResolvedObjectDictionaryInspection::Uncompressed(report) = inspection else {
+        unreachable!("uncompressed data should report uncompressed inspection")
+    };
+    assert_eq!(
+        report.reference,
+        IndirectRef {
+            object_number: 3,
+            generation: 0,
+        }
+    );
+    assert_eq!(report.entries.len(), 2);
+    assert_eq!(entry_bytes(source, report.entries[0].key_range), b"/Type");
+}
+
+#[test]
+fn inspect_object_dictionary_propagates_uncompressed_failure() {
+    let source = b"3 0 obj\n[ 1 2 3 ]\nendobj\n";
+
+    let error = inspect_object_dictionary(source, &uncompressed(0, 3))
+        .expect_err("an array-bodied object must reject");
+
+    assert_eq!(
+        error.reason,
+        ResolvedObjectDictionaryInspectionRejection::Uncompressed {
+            object_dictionary_reason:
+                IndirectObjectDictionaryInspectionRejection::NonDictionaryBody {
+                    token_kind: IndirectObjectBodyLeadingTokenKind::ArrayOpen,
+                },
+        }
+    );
+}
+
+#[test]
+fn inspect_object_dictionary_scans_compressed_member_body() {
+    let body: &[u8] = b"<< /Type /Catalog /Pages 2 0 R >>";
+    let mut decoded = b"header 0 ".to_vec();
+    let start = decoded.len();
+    decoded.extend_from_slice(body);
+    let resolved = ResolvedObjectData::Compressed {
+        reference: IndirectRef {
+            object_number: 10,
+            generation: 0,
+        },
+        object_stream_number: 5,
+        index_within_object_stream: 0,
+        decoded_object_stream: decoded.clone(),
+        object_body_span: start..decoded.len(),
+    };
+
+    let inspection = inspect_object_dictionary(&[], &resolved)
+        .expect("compressed member dictionary should inspect");
+
+    let ResolvedObjectDictionaryInspection::Compressed(report) = inspection else {
+        unreachable!("compressed data should report compressed inspection")
+    };
+    assert_eq!(
+        report.reference,
+        IndirectRef {
+            object_number: 10,
+            generation: 0,
+        }
+    );
+    assert_eq!(report.entries.len(), 2);
+    // Offsets are relative to the extracted member body, not the decoded buffer.
+    assert_eq!(entry_bytes(body, report.entries[0].key_range), b"/Type");
+    assert_eq!(entry_bytes(body, report.entries[1].key_range), b"/Pages");
+}
+
+#[test]
+fn inspect_object_dictionary_rejects_non_dictionary_compressed_body() {
+    let body: &[u8] = b"[ 1 2 3 ]";
+    let resolved = ResolvedObjectData::Compressed {
+        reference: IndirectRef {
+            object_number: 10,
+            generation: 0,
+        },
+        object_stream_number: 5,
+        index_within_object_stream: 0,
+        decoded_object_stream: body.to_vec(),
+        object_body_span: 0..body.len(),
+    };
+
+    let error = inspect_object_dictionary(&[], &resolved)
+        .expect_err("a non-dictionary compressed body must reject");
+
+    assert_eq!(
+        error.reason,
+        ResolvedObjectDictionaryInspectionRejection::CompressedNonDictionaryBody {
+            token_kind: IndirectObjectBodyLeadingTokenKind::ArrayOpen,
+        }
+    );
+}
 
 fn entry_bytes(source: &[u8], range: crate::DictionaryEntryByteRange) -> &[u8] {
     &source[range.start..range.end]

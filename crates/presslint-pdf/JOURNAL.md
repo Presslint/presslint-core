@@ -4,6 +4,69 @@ Older accumulated journal history lives in [JOURNAL-archive.md](JOURNAL-archive.
 
 ## Current State
 
+### Resolve Compressed Objects From Object Streams
+
+- Added the `object_stream_objects` module with
+  `extract_object_stream_member(input, object_stream_byte_offset,
+  requested_object_number, index, max_decoded_object_stream_bytes) ->
+  ExtractedObjectStreamMember`: the first OBJSTM slice. It resolves nothing
+  itself; the caller supplies the already-resolved object-stream object offset.
+  It validates the containing stream dictionary as exactly `/Type /ObjStm`,
+  requires exactly one direct non-negative integer `/N` and `/First` (both
+  fitting `usize`, with `/First <= decoded.len()`), decodes the body through the
+  existing stream-extent / filter-classification / `/DecodeParms` / bounded
+  `decode_flate_stream` helpers (unfiltered or a single `/FlateDecode` only),
+  parses `decoded[..First]` as exactly `N` `(object number, offset)` integer
+  pairs, requires offsets in range and strictly increasing, selects member
+  `index` (requiring `index < N` and the pair's object number to equal the
+  request), computes the body span `First + offset_i .. First + offset_{i+1}`
+  (or `decoded.len()` for the last member), and rejects a member body that
+  begins with an indirect-object header (compressed members are bare bodies).
+  `/Extends` is recorded (`has_extends`) but never followed.
+- Copy budget: the single intentional owned allocation is the bounded decoded
+  `/ObjStm` buffer, necessary because compressed member bodies live only in
+  decoded stream bytes, not in `input`. An unfiltered body is copied into an
+  owned buffer bounded by `max_decoded_object_stream_bytes` (a
+  `DecodedObjectStreamTooLarge` rejection over the limit) so the result never
+  borrows source bytes. `ExtractedObjectStreamMember` owns only that buffer plus
+  a `Range<usize>` span; no other source bytes are retained. No benchmark: one
+  bounded resolution path with an explicit copy budget, not a traversal hot
+  path, and no cache.
+- Added the body-aware resolver `resolve_object(input, lookup, reference,
+  max_decoded_object_stream_bytes) -> ResolvedObjectData` in `object_resolver`.
+  `ResolvedObjectData::Uncompressed { resolved }` delegates to the unchanged
+  `resolve_xref_object_offset`, so uncompressed and classic in-use objects stay
+  byte-for-byte compatible with the offset-only path.
+  `ResolvedObjectData::Compressed { reference, object_stream_number,
+  index_within_object_stream, decoded_object_stream, object_body_span }` owns the
+  bounded decoded buffer and the member body span. A compressed request requires
+  generation `0`; the containing object stream is resolved through
+  `resolve_xref_object_offset` and, if itself type-2 compressed, rejected as
+  `ObjectStreamIsCompressed`; other container failures surface as
+  `ObjectStreamObjectUnresolved`; member-body failures surface as
+  `ObjectStreamMemberExtraction { extraction_reason }`.
+- `resolve_xref_object_offset` is unchanged: it still reports type-2 compressed
+  entries as `UnsupportedCompressedXrefStreamEntry` and remains the zero-copy
+  uncompressed fast path. `resolve_object` is the opt-in superset.
+- The new `ObjectResolutionRejection` variants carry only small `Copy` data so
+  `ObjectResolutionRejection` stays `Copy` (it is embedded in
+  `LookupIndirectLengthRejection`), and the error stays under the
+  large-error-size gate: the extraction-stage `StreamExtent` reason is a marker
+  (offset carried by the outer error, direct-`/Length` decode path only) and the
+  `ObjectStreamMemberExtraction` variant carries only the extraction reason
+  (object-stream offset carried by `object_byte_offset`).
+- Added the companion `inspect_object_dictionary(input, resolved:
+  &ResolvedObjectData) -> ResolvedObjectDictionaryInspection` in
+  `object_dictionary`. Uncompressed data delegates to
+  `inspect_indirect_object_dictionary`; compressed data scans the extracted
+  member body (requiring a leading `<<`, since members carry no indirect header)
+  and reports `CompressedObjectDictionaryInspection` with entry spans relative to
+  the member body, not to `input`.
+- Deferred to the next OBJSTM wiring slice: threading `ResolvedObjectData`
+  through catalog / page-tree / document-access navigation, adding an
+  `ObjectLookup` / `DocumentAccessBackend` variant, following `/Extends` chains,
+  and object-stream caching / whole-document object maps.
+
 ### T112 - Image `XObject` Dictionary Metadata
 
 - Added the `image_xobject` module with

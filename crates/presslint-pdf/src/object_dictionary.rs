@@ -3,7 +3,8 @@ use serde::{Deserialize, Serialize};
 use crate::{
     DictionaryEntryInspectionRejection, DictionaryEntrySpan, IndirectObjectBodyLeadingTokenKind,
     IndirectObjectBodyTokenInspectionRejection, IndirectObjectHeaderByteRange,
-    IndirectObjectHeaderInspectionRejection, IndirectRef,
+    IndirectObjectHeaderInspectionRejection, IndirectRef, ResolvedObjectData,
+    inspect_dictionary_entries, inspect_indirect_object_body_token,
 };
 
 /// Top-level dictionary entry spans of a dictionary-bodied indirect object.
@@ -181,4 +182,170 @@ const fn object_dictionary_error(
         error_byte_offset,
         reason,
     }
+}
+
+/// Top-level dictionary entry spans of a bare compressed object body.
+///
+/// A compressed object stream member is a bare object body with no
+/// `N G obj ... endobj` wrapper, so this report carries the `reference` from the
+/// resolving cross-reference entry rather than a parsed header, and its offsets
+/// are relative to the extracted member body slice, not to the source `input`.
+/// It retains or copies no PDF bytes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompressedObjectDictionaryInspection {
+    /// Requested indirect reference of the compressed object.
+    pub reference: IndirectRef,
+    /// Byte offset of the body's opening `<<` within the extracted member body.
+    pub dictionary_open_byte_offset: usize,
+    /// Byte offset of the matching closing `>>` within the extracted member
+    /// body.
+    pub dictionary_close_byte_offset: usize,
+    /// Exclusive byte offset immediately after the closing `>>`.
+    pub after_dictionary_close_byte_offset: usize,
+    /// Deepest `<<` nesting depth observed; `1` for a flat object dictionary.
+    pub max_observed_dictionary_depth: usize,
+    /// Top-level `/Name value` entries in member-body order.
+    pub entries: Vec<DictionaryEntrySpan>,
+}
+
+/// Dictionary inspection over body-aware resolved object data.
+///
+/// Uncompressed data delegates to [`inspect_indirect_object_dictionary`];
+/// compressed data reports the member-body-relative
+/// [`CompressedObjectDictionaryInspection`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ResolvedObjectDictionaryInspection {
+    /// Inspection of an uncompressed object at its source byte offset.
+    Uncompressed(IndirectObjectDictionaryInspection),
+    /// Inspection of a compressed object's extracted member body.
+    Compressed(CompressedObjectDictionaryInspection),
+}
+
+/// Error returned when a resolved object's dictionary cannot be inspected.
+///
+/// This report retains or copies no PDF bytes; it carries only an optional error
+/// offset (relative to `input` for the uncompressed path or to the member body
+/// for the compressed path) and the structured reason.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResolvedObjectDictionaryInspectionError {
+    /// Byte offset where the malformed or unsupported construct was found, when
+    /// available.
+    pub error_byte_offset: Option<usize>,
+    /// Structured failure reason.
+    pub reason: ResolvedObjectDictionaryInspectionRejection,
+}
+
+/// Structured resolved-object dictionary inspection rejection reasons.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "reason", rename_all = "snake_case")]
+pub enum ResolvedObjectDictionaryInspectionRejection {
+    /// The delegated uncompressed object-dictionary inspection failed.
+    Uncompressed {
+        /// Underlying object-dictionary rejection reason.
+        object_dictionary_reason: IndirectObjectDictionaryInspectionRejection,
+    },
+    /// The compressed member body's leading token could not be classified.
+    CompressedBodyToken {
+        /// Underlying body-token classification rejection reason.
+        body_token_reason: IndirectObjectBodyTokenInspectionRejection,
+    },
+    /// The compressed member body's leading token is not a dictionary open
+    /// (`<<`).
+    CompressedNonDictionaryBody {
+        /// Classified leading token family that was not a dictionary open.
+        token_kind: IndirectObjectBodyLeadingTokenKind,
+    },
+    /// A delegated top-level dictionary entry inspection of the compressed
+    /// member body failed.
+    CompressedDictionaryEntries {
+        /// Underlying dictionary entry rejection reason.
+        dictionary_entries_reason: DictionaryEntryInspectionRejection,
+    },
+}
+
+/// Inspect the top-level dictionary entries of body-aware resolved object data.
+///
+/// [`ResolvedObjectData::Uncompressed`] delegates to
+/// [`inspect_indirect_object_dictionary`] at the resolved source byte offset.
+/// [`ResolvedObjectData::Compressed`] scans the extracted member body: it
+/// requires a leading `<<` (a bare dictionary body, since compressed members
+/// carry no indirect header) and reports member-body-relative entry spans.
+///
+/// # Errors
+///
+/// Returns [`ResolvedObjectDictionaryInspectionError`] for a delegated
+/// uncompressed dictionary failure, or for a compressed member body whose
+/// leading token cannot be classified, is not a dictionary open, or whose
+/// top-level entries cannot be scanned.
+pub fn inspect_object_dictionary(
+    input: &[u8],
+    resolved: &ResolvedObjectData,
+) -> Result<ResolvedObjectDictionaryInspection, ResolvedObjectDictionaryInspectionError> {
+    match resolved {
+        ResolvedObjectData::Uncompressed { resolved } => {
+            let inspection = inspect_indirect_object_dictionary(input, resolved.object_byte_offset)
+                .map_err(|error| ResolvedObjectDictionaryInspectionError {
+                    error_byte_offset: error.error_byte_offset,
+                    reason: ResolvedObjectDictionaryInspectionRejection::Uncompressed {
+                        object_dictionary_reason: error.reason,
+                    },
+                })?;
+            Ok(ResolvedObjectDictionaryInspection::Uncompressed(inspection))
+        }
+        ResolvedObjectData::Compressed {
+            reference,
+            decoded_object_stream,
+            object_body_span,
+            ..
+        } => {
+            let body = decoded_object_stream
+                .get(object_body_span.start..object_body_span.end)
+                .unwrap_or(&[]);
+            inspect_compressed_object_dictionary(body, *reference)
+                .map(ResolvedObjectDictionaryInspection::Compressed)
+        }
+    }
+}
+
+fn inspect_compressed_object_dictionary(
+    body: &[u8],
+    reference: IndirectRef,
+) -> Result<CompressedObjectDictionaryInspection, ResolvedObjectDictionaryInspectionError> {
+    let body_token = inspect_indirect_object_body_token(body, 0).map_err(|error| {
+        ResolvedObjectDictionaryInspectionError {
+            error_byte_offset: error.error_byte_offset,
+            reason: ResolvedObjectDictionaryInspectionRejection::CompressedBodyToken {
+                body_token_reason: error.reason,
+            },
+        }
+    })?;
+
+    if body_token.token_kind != IndirectObjectBodyLeadingTokenKind::DictionaryOpen {
+        return Err(ResolvedObjectDictionaryInspectionError {
+            error_byte_offset: Some(body_token.first_token_byte_offset),
+            reason: ResolvedObjectDictionaryInspectionRejection::CompressedNonDictionaryBody {
+                token_kind: body_token.token_kind,
+            },
+        });
+    }
+
+    let entries =
+        inspect_dictionary_entries(body, body_token.first_token_byte_offset).map_err(|error| {
+            ResolvedObjectDictionaryInspectionError {
+                error_byte_offset: error.error_byte_offset,
+                reason: ResolvedObjectDictionaryInspectionRejection::CompressedDictionaryEntries {
+                    dictionary_entries_reason: error.reason,
+                },
+            }
+        })?;
+
+    Ok(CompressedObjectDictionaryInspection {
+        reference,
+        dictionary_open_byte_offset: entries.dictionary.open_byte_offset,
+        dictionary_close_byte_offset: entries.dictionary.close_byte_offset,
+        after_dictionary_close_byte_offset: entries.dictionary.after_close_byte_offset,
+        max_observed_dictionary_depth: entries.dictionary.max_observed_depth,
+        entries: entries.entries,
+    })
 }

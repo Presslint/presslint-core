@@ -9,9 +9,229 @@ use serde_harness::{from_serde_value, serde_value};
 use crate::{
     ClassicXrefEntryState, ClassicXrefTableInspection, IndirectObjectHeaderInspectionRejection,
     ObjectLookup, ObjectLookupLocation, ObjectResolutionError, ObjectResolutionRejection,
-    ResolvedObject, XrefStreamEntry, XrefStreamEntryRecord, XrefStreamSection,
-    XrefStreamSubsection, resolve_classic_xref_object_offset, resolve_xref_object_offset,
+    ObjectStreamMemberExtractionRejection, ResolvedObject, ResolvedObjectData, XrefStreamEntry,
+    XrefStreamEntryRecord, XrefStreamSection, XrefStreamSubsection,
+    resolve_classic_xref_object_offset, resolve_object, resolve_xref_object_offset,
 };
+
+const MAX_OBJSTM: usize = 4096;
+
+/// A `5 0 obj` `/ObjStm` at source offset zero holding compressed members
+/// `10 0` (`<< /Type /Catalog >>`) and `11 0` (`<< /Type /Pages >>`).
+fn object_stream_source() -> Vec<u8> {
+    let body_a: &[u8] = b"<< /Type /Catalog >>";
+    let body_b: &[u8] = b"<< /Type /Pages >>";
+    let header = format!("10 0 11 {} ", body_a.len());
+    let first = header.len();
+    let mut body = header.into_bytes();
+    body.extend_from_slice(body_a);
+    body.extend_from_slice(body_b);
+    let dictionary = format!(
+        "<< /Type /ObjStm /N 2 /First {first} /Length {} >>",
+        body.len()
+    );
+    let mut source = b"5 0 obj\n".to_vec();
+    source.extend_from_slice(dictionary.as_bytes());
+    source.extend_from_slice(b"\nstream\n");
+    source.extend_from_slice(&body);
+    source.extend_from_slice(b"\nendstream\nendobj\n");
+    source
+}
+
+fn compressed_entry(
+    object_number: usize,
+    object_stream_number: usize,
+    index_within_object_stream: usize,
+) -> XrefStreamEntry {
+    entry(
+        object_number,
+        XrefStreamEntryRecord::Compressed {
+            object_stream_number,
+            index_within_object_stream,
+        },
+    )
+}
+
+#[test]
+fn resolve_object_extracts_compressed_member_body() {
+    let source = object_stream_source();
+    let section = xref_stream_section(vec![
+        entry(
+            5,
+            XrefStreamEntryRecord::Uncompressed {
+                byte_offset: 0,
+                generation: 0,
+            },
+        ),
+        compressed_entry(10, 5, 0),
+    ]);
+
+    let resolved = resolve_object(
+        &source,
+        ObjectLookup::XrefStreamSection(&section),
+        indirect_ref(10, 0),
+        MAX_OBJSTM,
+    )
+    .expect("compressed member should resolve");
+
+    let (reference, object_stream_number, index, body) = match &resolved {
+        ResolvedObjectData::Compressed {
+            reference,
+            object_stream_number,
+            index_within_object_stream,
+            decoded_object_stream,
+            object_body_span,
+        } => (
+            *reference,
+            *object_stream_number,
+            *index_within_object_stream,
+            &decoded_object_stream[object_body_span.start..object_body_span.end],
+        ),
+        ResolvedObjectData::Uncompressed { .. } => {
+            (indirect_ref(0, 0), usize::MAX, usize::MAX, &[][..])
+        }
+    };
+
+    assert_eq!(reference, indirect_ref(10, 0));
+    assert_eq!(object_stream_number, 5);
+    assert_eq!(index, 0);
+    assert_eq!(body, b"<< /Type /Catalog >>");
+}
+
+#[test]
+fn resolve_object_passes_through_uncompressed_objects() {
+    let source = page_object_source();
+    let section = xref_stream_section(vec![entry(
+        3,
+        XrefStreamEntryRecord::Uncompressed {
+            byte_offset: 0,
+            generation: 0,
+        },
+    )]);
+
+    let resolved = resolve_object(
+        &source,
+        ObjectLookup::XrefStreamSection(&section),
+        indirect_ref(3, 0),
+        MAX_OBJSTM,
+    )
+    .expect("uncompressed object should resolve");
+
+    assert_eq!(
+        resolved,
+        ResolvedObjectData::Uncompressed {
+            resolved: ResolvedObject {
+                reference: indirect_ref(3, 0),
+                object_byte_offset: 0,
+                xref_generation: 0,
+            },
+        }
+    );
+}
+
+#[test]
+fn resolve_object_rejects_non_zero_compressed_generation() {
+    let source = object_stream_source();
+    let section = xref_stream_section(vec![compressed_entry(10, 5, 0)]);
+
+    let error = resolve_object(
+        &source,
+        ObjectLookup::XrefStreamSection(&section),
+        indirect_ref(10, 2),
+        MAX_OBJSTM,
+    )
+    .expect_err("a non-zero compressed generation must not resolve");
+
+    assert_eq!(
+        error.reason,
+        ObjectResolutionRejection::CompressedObjectGenerationNotZero {
+            object_number: 10,
+            object_stream_number: 5,
+            index_within_object_stream: 0,
+            requested_generation: 2,
+        }
+    );
+}
+
+#[test]
+fn resolve_object_rejects_compressed_object_stream() {
+    let source = object_stream_source();
+    let section = xref_stream_section(vec![compressed_entry(5, 7, 0), compressed_entry(10, 5, 0)]);
+
+    let error = resolve_object(
+        &source,
+        ObjectLookup::XrefStreamSection(&section),
+        indirect_ref(10, 0),
+        MAX_OBJSTM,
+    )
+    .expect_err("a compressed object stream must not resolve");
+
+    assert_eq!(
+        error.reason,
+        ObjectResolutionRejection::ObjectStreamIsCompressed {
+            object_number: 10,
+            object_stream_number: 5,
+            index_within_object_stream: 0,
+        }
+    );
+}
+
+#[test]
+fn resolve_object_reports_unresolvable_object_stream() {
+    let source = object_stream_source();
+    let section = xref_stream_section(vec![compressed_entry(10, 5, 0)]);
+
+    let error = resolve_object(
+        &source,
+        ObjectLookup::XrefStreamSection(&section),
+        indirect_ref(10, 0),
+        MAX_OBJSTM,
+    )
+    .expect_err("a missing object stream must not resolve");
+
+    assert_eq!(
+        error.reason,
+        ObjectResolutionRejection::ObjectStreamObjectUnresolved {
+            object_number: 10,
+            object_stream_number: 5,
+            index_within_object_stream: 0,
+        }
+    );
+}
+
+#[test]
+fn resolve_object_propagates_member_extraction_failure() {
+    let source = object_stream_source();
+    let section = xref_stream_section(vec![
+        entry(
+            5,
+            XrefStreamEntryRecord::Uncompressed {
+                byte_offset: 0,
+                generation: 0,
+            },
+        ),
+        compressed_entry(10, 5, 9),
+    ]);
+
+    let error = resolve_object(
+        &source,
+        ObjectLookup::XrefStreamSection(&section),
+        indirect_ref(10, 0),
+        MAX_OBJSTM,
+    )
+    .expect_err("an out-of-range member index must not resolve");
+
+    assert_eq!(error.object_byte_offset, Some(0));
+    assert_eq!(
+        error.reason,
+        ObjectResolutionRejection::ObjectStreamMemberExtraction {
+            extraction_reason: ObjectStreamMemberExtractionRejection::IndexOutOfRange {
+                index: 9,
+                object_count: 2,
+            },
+        }
+    );
+}
 
 /// Single in-use object body whose header is `3 0 obj` at offset zero.
 fn page_object_source() -> Vec<u8> {

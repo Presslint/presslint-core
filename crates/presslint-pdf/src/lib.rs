@@ -41,6 +41,7 @@ mod object_header;
 mod object_lookup;
 mod object_resolver;
 mod object_stream;
+mod object_stream_objects;
 mod page_content_extents;
 mod page_content_targets;
 mod page_contents;
@@ -141,8 +142,11 @@ pub use object_body::{
     inspect_indirect_object_body_token,
 };
 pub use object_dictionary::{
-    IndirectObjectDictionaryInspection, IndirectObjectDictionaryInspectionError,
-    IndirectObjectDictionaryInspectionRejection, inspect_indirect_object_dictionary,
+    CompressedObjectDictionaryInspection, IndirectObjectDictionaryInspection,
+    IndirectObjectDictionaryInspectionError, IndirectObjectDictionaryInspectionRejection,
+    ResolvedObjectDictionaryInspection, ResolvedObjectDictionaryInspectionError,
+    ResolvedObjectDictionaryInspectionRejection, inspect_indirect_object_dictionary,
+    inspect_object_dictionary,
 };
 pub use object_header::{
     IndirectObjectHeaderByteRange, IndirectObjectHeaderInspection,
@@ -151,8 +155,8 @@ pub use object_header::{
 };
 pub use object_lookup::{ObjectLookup, ObjectLookupLocation, locate_xref_object};
 pub use object_resolver::{
-    ObjectResolutionError, ObjectResolutionRejection, ResolvedObject,
-    resolve_classic_xref_object_offset, resolve_xref_object_offset,
+    ObjectResolutionError, ObjectResolutionRejection, ResolvedObject, ResolvedObjectData,
+    resolve_classic_xref_object_offset, resolve_object, resolve_xref_object_offset,
 };
 pub use object_stream::{
     ContentStreamStartInspection, ContentStreamStartInspectionError,
@@ -164,6 +168,10 @@ pub use object_stream::{
     IndirectLengthContentStreamDataExtentInspectionRejection, StreamEolIssue, StreamKeywordEol,
     inspect_content_stream_start, inspect_direct_length_content_stream_data_extent,
     inspect_indirect_length_content_stream_data_extent,
+};
+pub use object_stream_objects::{
+    ExtractedObjectStreamMember, ObjectStreamMemberExtractionError,
+    ObjectStreamMemberExtractionRejection, extract_object_stream_member,
 };
 pub use page_content_extents::{
     PageContentExtentInspection, PageContentExtentsInspection, inspect_page_content_extents,
