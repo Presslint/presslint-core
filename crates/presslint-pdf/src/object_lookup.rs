@@ -1,9 +1,9 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    ClassicXrefAmbiguousObjectEntry, ClassicXrefObjectLocation, ClassicXrefTableInspection,
-    XrefStreamChain, XrefStreamEntry, XrefStreamEntryRecord, XrefStreamSection,
-    resolve_classic_xref_object,
+    ClassicXrefAmbiguousObjectEntry, ClassicXrefChain, ClassicXrefObjectLocation,
+    ClassicXrefTableInspection, XrefStreamChain, XrefStreamEntry, XrefStreamEntryRecord,
+    XrefStreamSection, resolve_classic_xref_chain_object, resolve_classic_xref_object,
 };
 
 /// Borrowed object lookup backend.
@@ -15,6 +15,8 @@ use crate::{
 pub enum ObjectLookup<'a> {
     /// Parsed classic cross-reference table backend.
     ClassicXref(&'a ClassicXrefTableInspection),
+    /// Merged newest-wins classic cross-reference table `/Prev` chain backend.
+    ClassicXrefChain(&'a ClassicXrefChain),
     /// Decoded single cross-reference-stream section backend.
     XrefStreamSection(&'a XrefStreamSection),
     /// Merged newest-wins cross-reference-stream `/Prev` chain backend.
@@ -147,6 +149,7 @@ pub enum ObjectLookupLocation {
 pub fn locate_xref_object(lookup: ObjectLookup<'_>, object_number: usize) -> ObjectLookupLocation {
     match lookup {
         ObjectLookup::ClassicXref(xref) => locate_classic_object(xref, object_number),
+        ObjectLookup::ClassicXrefChain(chain) => locate_classic_chain_object(chain, object_number),
         ObjectLookup::XrefStreamSection(section) => {
             locate_xref_stream_entries(&section.entries, object_number)
         }
@@ -164,6 +167,19 @@ fn locate_classic_object(
         return ObjectLookupLocation::ClassicObjectNumberOutOfRange { object_number };
     };
     classic_location(resolve_classic_xref_object(xref, classic_object_number))
+}
+
+fn locate_classic_chain_object(
+    chain: &ClassicXrefChain,
+    object_number: usize,
+) -> ObjectLookupLocation {
+    let Ok(classic_object_number) = u32::try_from(object_number) else {
+        return ObjectLookupLocation::ClassicObjectNumberOutOfRange { object_number };
+    };
+    classic_location(resolve_classic_xref_chain_object(
+        chain,
+        classic_object_number,
+    ))
 }
 
 fn classic_location(location: ClassicXrefObjectLocation) -> ObjectLookupLocation {

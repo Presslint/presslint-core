@@ -316,15 +316,15 @@ pub fn inspect_content_stream_data_extent_with_lookup(
                         )
                     })
                 }
-                other @ (ObjectLookup::XrefStreamSection(_) | ObjectLookup::XrefStreamChain(_)) => {
-                    resolve_indirect_length_via_lookup(
-                        input,
-                        other,
-                        object_offset,
-                        stream_start,
-                        length_entry,
-                    )
-                }
+                other @ (ObjectLookup::ClassicXrefChain(_)
+                | ObjectLookup::XrefStreamSection(_)
+                | ObjectLookup::XrefStreamChain(_)) => resolve_indirect_length_via_lookup(
+                    input,
+                    other,
+                    object_offset,
+                    stream_start,
+                    length_entry,
+                ),
             }
         }
         value_kind => Err(content_stream_data_extent_error(

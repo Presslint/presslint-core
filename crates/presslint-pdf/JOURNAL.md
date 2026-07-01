@@ -4,6 +4,76 @@ Older accumulated journal history lives in [JOURNAL-archive.md](JOURNAL-archive.
 
 ## Current State
 
+### T104 - Classic-Table `/Prev` Chain Object Map
+
+- Added `build_classic_xref_chain(input, startxref_byte_offset)`, the classic
+  parallel of the T103 `XrefStreamChain`. It classifies and inspects one classic
+  cross-reference table per section with the existing
+  `inspect_classic_xref_table`, follows the classic trailer `/Prev` byte offset
+  newest-to-oldest, and materializes one deterministic newest-wins
+  `Vec<ClassicXrefEntry>` sorted ascending by object number.
+- Contract / merge rule: the `startxref` section is newest. Merge precedence is
+  **newest-wins including free-entry shadowing** — a newer entry (in-use or free)
+  shadows any older entry for the same object number, and earlier sections only
+  fill unseen numbers, implemented as a `BTreeMap<u32, ClassicXrefEntry>` with
+  `or_insert` so the first insertion (newest) wins. Free-list fields are
+  preserved exactly as parsed (a free entry's `byte_offset` is the next-free
+  object number; object 0 is the head at generation 65535); the chain reports
+  parsed structure only and validates no free-list integrity.
+- Intra-section-duplicate choice: unlike the single-table lookup, which flags
+  duplicate object numbers inside one table as ambiguous, the chain treats
+  cross-section duplicates as expected (newest wins) and keeps the **first entry
+  in source order** for an intra-section duplicate (first-in-section), because
+  the newest section is processed first and `or_insert` keeps the first
+  insertion. This is documented on `ClassicXrefChain`.
+- Companion micro-inspector: `inspect_classic_xref_trailer_prev` is bundled as
+  the chain's locator (too small to ship alone). It is a focused sibling of
+  `inspect_classic_xref_trailer_root`, reusing the same trailer-dictionary and
+  `inspect_dictionary_entries` scan plus the shared exact-key/duplicate-key
+  `unique_entry` and `parse_non_negative_integer` helpers already used for the
+  xref-stream trailer `/Prev`. It reports absent `/Prev` as `Ok(None)`, one
+  direct non-negative integer as `Ok(Some(..))`, and duplicate/non-integer/
+  overflow `/Prev` as distinct structured rejections.
+- `/Root` is read from the newest section only. `effective_size` tracks the max
+  direct `/Size` observed across section trailers; because classic object
+  location uses byte offsets rather than `/Size`, a section trailer without a
+  readable direct `/Size` simply does not contribute and does not gate the chain
+  (best-effort, deliberately looser than the xref-stream chain, whose `/Size` is
+  required geometry).
+- `PrevSectionNotClassicXref` stop: a classic `/Prev` target that classifies as
+  a cross-reference stream is a structured stop (mixed classic/xref-stream chains
+  are deferred to Y2), never a silent drop and never a panic. Every other failure
+  path (out-of-bounds offset, cycle, section/entry bounds, classification, table,
+  trailer `/Root`, trailer `/Prev`) is a distinct structured rejection and no
+  partial chain is returned.
+- Bounds mirror T103: a visited-offset `BTreeSet` for cycles,
+  `MAX_CLASSIC_XREF_CHAIN_SECTIONS = 64`, and
+  `MAX_CLASSIC_XREF_CHAIN_ENTRIES = 1_000_000`, so a malformed `/Prev` graph
+  cannot cause unbounded work or allocation.
+- Wired as a new backend: `ObjectLookup::ClassicXrefChain`,
+  `DocumentAccessBackend::ClassicXrefChain`, and the
+  `DocumentAccessRejection::ClassicXrefChain` / `TrailerPrev` stops.
+  `inspect_document_access` selects the classic-chain backend when a classic
+  trailer carries `/Prev` (an absent `/Prev` keeps the single-table
+  `ClassicXref` backend). The `content_stream_extent.rs` exhaustive match and the
+  umbrella `pdf_inventory.rs` `DocumentAccessBackend` dispatch learned the new
+  variant; the chain resolves indirect `/Length` through the shared
+  `resolve_xref_object_offset` path like the other non-classic-table backends.
+- Copy budget: `input` stays borrowed. The only owned output is the bounded
+  `Vec<ClassicXrefEntry>` (small `Copy` records), the bounded section-offset
+  vector, and a `BTreeMap` used only during the merge. No PDF source bytes,
+  trailer bytes, object bodies, or stream bodies are retained or copied. Object
+  location binary-searches the already-sorted entry vector and builds no per-call
+  map or cache.
+- No new benchmark target: like T103, a same-type chain builder over bounded
+  report materialization does not warrant a Criterion target; the work is bounded
+  by the visited set and the two `MAX_*` constants, not a measured tight loop.
+- Y2 deferral: the classic and xref-stream chains stay **parallel** same-type
+  builders (classic and xref-stream entries have different currencies). A future
+  Y2 unifies them via a third mixed-chain abstraction with these two builders as
+  feeders; this task does not attempt a generic merged map, hybrid `/XRefStm`,
+  object-stream/type-2 resolution, or byte mutation.
+
 ### T103 - Xref-Stream `/Prev` Chain Object Map
 
 - Added a bounded same-type xref-stream `/Prev` chain builder that decodes each

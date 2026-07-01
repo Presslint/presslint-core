@@ -2,16 +2,17 @@
 //!
 //! This crate provides byte-preserving structural inspection for PDF sources:
 //! source classification, classic xref parsing, single-section xref-stream
-//! decoding, bounded `/Prev` multi-section xref-stream chaining, a
-//! backend-neutral [`ObjectLookup`] over supported backends, object
-//! resolution, stream extent access, page-tree traversal, and the
-//! page-content-target/extent path threaded through the same lookup, plus small
-//! planning contracts used by higher-level crates. Classic helpers are preserved
-//! as thin wrappers over their neutral `_with_lookup` variants, so both
-//! classic-xref, single-section xref-stream, and same-type incrementally
-//! updated xref-stream documents locate page content stream byte extents through
-//! one API. The APIs carry structural metadata and byte ranges rather than
-//! retaining source payloads.
+//! decoding, bounded `/Prev` multi-section chaining for both classic tables and
+//! xref streams as parallel same-type newest-wins builders, a backend-neutral
+//! [`ObjectLookup`] over supported backends, object resolution, stream extent
+//! access, page-tree traversal, and the page-content-target/extent path threaded
+//! through the same lookup, plus small planning contracts used by higher-level
+//! crates. Classic helpers are preserved as thin wrappers over their neutral
+//! `_with_lookup` variants, so classic-xref, classic incrementally updated,
+//! single-section xref-stream, and same-type incrementally updated xref-stream
+//! documents all locate page content stream byte extents through one API. The
+//! APIs carry structural metadata and byte ranges rather than retaining source
+//! payloads.
 
 #![forbid(unsafe_code)]
 
@@ -21,6 +22,7 @@ use std::collections::BTreeSet;
 mod array_extent;
 mod catalog_pages;
 mod classic_xref;
+mod classic_xref_chain;
 mod content_stream_extent;
 mod content_stream_filter;
 mod content_stream_slice;
@@ -51,6 +53,7 @@ mod source_utils;
 mod startxref;
 mod stream_decode;
 mod trailer;
+mod trailer_prev;
 mod trailer_root;
 mod xref_chain;
 mod xref_resolve;
@@ -72,6 +75,11 @@ pub use catalog_pages::{
     inspect_catalog_pages,
 };
 pub use classic_xref::inspect_classic_xref_table;
+pub use classic_xref_chain::{
+    ClassicXrefChain, ClassicXrefChainError, ClassicXrefChainRejection,
+    MAX_CLASSIC_XREF_CHAIN_ENTRIES, MAX_CLASSIC_XREF_CHAIN_SECTIONS, build_classic_xref_chain,
+    resolve_classic_xref_chain_object,
+};
 pub use content_stream_extent::{
     ContentStreamDataExtentInspection, ContentStreamDataExtentInspectionError,
     ContentStreamDataExtentInspectionRejection, LookupIndirectLengthRejection,
@@ -200,6 +208,10 @@ pub use stream_decode::{
 pub use trailer::{
     ClassicXrefTrailerDictionaryInspection, ClassicXrefTrailerDictionaryInspectionError,
     ClassicXrefTrailerDictionaryInspectionRejection, inspect_classic_xref_trailer_dictionary,
+};
+pub use trailer_prev::{
+    ClassicXrefTrailerPrevInspection, ClassicXrefTrailerPrevInspectionError,
+    ClassicXrefTrailerPrevInspectionRejection, inspect_classic_xref_trailer_prev,
 };
 pub use trailer_root::{
     ClassicXrefTrailerRootInspection, ClassicXrefTrailerRootInspectionError,

@@ -1,5 +1,25 @@
 # presslint Journal
 
+## T104 - Classic Incremental-Update Inventory End-to-End
+
+- `build_pdf_inventory` now inventories classic incrementally-updated PDFs
+  end-to-end. The only change in this crate is one mechanical dispatch arm: the
+  `match &access.backend` site maps the new
+  `DocumentAccessBackend::ClassicXrefChain { chain }` to
+  `ObjectLookup::ClassicXrefChain(chain)`, so a classic trailer carrying `/Prev`
+  now navigates and inventories through the same neutral spine as the classic
+  single-table, single-section xref-stream, and xref-stream `/Prev`-chain
+  backends.
+- A classic two-section fixture whose newest section redefines the page
+  `/Contents` object is inventoried to the updated content stream, proving the
+  newest-wins classic chain resolves the page content through the bridge.
+- Copy budget is unchanged: raw streams stay borrowed, Flate streams allocate
+  only the bounded decoded buffer, reports retain no PDF source or stream bytes,
+  and no per-page object map/cache is built over `ObjectLookup`.
+- Next queue: `#26` document-level inventory merge, then the Y2 design note (a
+  third mixed-chain abstraction unifying the parallel classic and xref-stream
+  `/Prev` chain builders as feeders).
+
 ## T095 - Classic PDF Inventory Bridge
 
 - Added `build_classic_pdf_inventory`, the umbrella-crate bridge from borrowed

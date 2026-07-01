@@ -3,15 +3,17 @@ use serde::{Deserialize, Serialize};
 use crate::startxref::inspect_startxref;
 use crate::xref_section::classify_xref_section;
 use crate::{
-    CatalogPagesInspection, CatalogPagesInspectionError, ClassicXrefTableInspection,
-    ClassicXrefTableInspectionError, ClassicXrefTrailerRootInspection,
+    CatalogPagesInspection, CatalogPagesInspectionError, ClassicXrefChain, ClassicXrefChainError,
+    ClassicXrefTableInspection, ClassicXrefTableInspectionError,
+    ClassicXrefTrailerPrevInspectionError, ClassicXrefTrailerRootInspection,
     ClassicXrefTrailerRootInspectionError, IndirectRef, ObjectLookup, ObjectResolutionError,
     PageTreeLeavesInspection, PageTreeLeavesInspectionError, PdfSourceDiagnostic, PdfStartXref,
     ResolvedObject, XrefSection, XrefStreamChain, XrefStreamChainError, XrefStreamSection,
-    XrefStreamSectionError, build_xref_stream_chain, decode_xref_stream_section,
-    inspect_catalog_pages, inspect_classic_xref_table, inspect_classic_xref_trailer_root,
-    inspect_page_tree_leaves, inspect_page_tree_leaves_with_lookup,
-    resolve_classic_xref_object_offset, resolve_xref_object_offset,
+    XrefStreamSectionError, build_classic_xref_chain, build_xref_stream_chain,
+    decode_xref_stream_section, inspect_catalog_pages, inspect_classic_xref_table,
+    inspect_classic_xref_trailer_prev, inspect_classic_xref_trailer_root, inspect_page_tree_leaves,
+    inspect_page_tree_leaves_with_lookup, resolve_classic_xref_object_offset,
+    resolve_xref_object_offset,
 };
 
 /// Report-only structural access summary for a classic-xref PDF.
@@ -288,6 +290,12 @@ pub enum DocumentAccessBackend {
         /// Trailer `/Root` inspection, including the parsed catalog reference.
         trailer_root: ClassicXrefTrailerRootInspection,
     },
+    /// The `startxref` section classified as a classic cross-reference table
+    /// carrying `/Prev`, followed into a bounded same-type newest-wins chain.
+    ClassicXrefChain {
+        /// Merged same-type classic cross-reference table `/Prev` chain.
+        chain: ClassicXrefChain,
+    },
     /// The `startxref` section classified as a single cross-reference stream.
     XrefStreamSection {
         /// Decoded single cross-reference-stream section, including its `/Root`
@@ -338,6 +346,16 @@ pub enum DocumentAccessRejection {
     TrailerRoot {
         /// Delegated trailer `/Root` inspection failure.
         error: ClassicXrefTrailerRootInspectionError,
+    },
+    /// Trailer `/Prev` inspection failed while deciding the classic backend.
+    TrailerPrev {
+        /// Delegated trailer `/Prev` inspection failure.
+        error: ClassicXrefTrailerPrevInspectionError,
+    },
+    /// The classic cross-reference table `/Prev` chain could not be built.
+    ClassicXrefChain {
+        /// Delegated classic chain-building failure.
+        error: Box<ClassicXrefChainError>,
     },
     /// The single cross-reference-stream section could not be decoded.
     XrefStreamDecode {
@@ -393,10 +411,13 @@ pub enum DocumentAccessRejection {
 /// [`resolve_xref_object_offset`], and leaves are enumerated through
 /// [`inspect_page_tree_leaves_with_lookup`].
 ///
+/// A classic table whose trailer carries `/Prev` builds a bounded
+/// [`ClassicXrefChain`] and resolves through [`ObjectLookup::ClassicXrefChain`];
+/// an absent classic `/Prev` keeps [`DocumentAccessBackend::ClassicXref`].
 /// Single-section xref-stream documents keep the existing
-/// [`DocumentAccessBackend::XrefStreamSection`] report. Only a present `/Prev`
-/// selects [`DocumentAccessBackend::XrefStreamChain`]. Classic `/Prev`, mixed
-/// classic/xref chains, and `/XRefStm` hybrid references are not followed.
+/// [`DocumentAccessBackend::XrefStreamSection`] report; only a present
+/// xref-stream `/Prev` selects [`DocumentAccessBackend::XrefStreamChain`]. Mixed
+/// classic/xref chains and `/XRefStm` hybrid references are not followed.
 ///
 /// Page-tree leaf enumeration is non-fatal for individual kids: other-typed
 /// kids, per-kid resolution failures (including compressed or reserved
@@ -412,8 +433,8 @@ pub enum DocumentAccessRejection {
 ///
 /// Returns [`DocumentAccessError`] when `startxref` is missing or malformed, the
 /// section cannot be classified, the single cross-reference-stream section fails
-/// to decode, an xref-stream chain cannot be built, or any delegated
-/// table/trailer/resolution/catalog/leaf stage fails.
+/// to decode, a classic or xref-stream `/Prev` chain cannot be built, or any
+/// delegated table/trailer/resolution/catalog/leaf stage fails.
 pub fn inspect_document_access(input: &[u8]) -> Result<DocumentAccess, DocumentAccessError> {
     let startxref = inspect_startxref(input).map_err(|diagnostic| {
         access_error(input, DocumentAccessRejection::StartXref { diagnostic })
@@ -473,12 +494,23 @@ fn walk_spine(
 }
 
 /// Compose the spine over a classic cross-reference table backend.
+///
+/// A classic trailer that carries `/Prev` selects the bounded classic `/Prev`
+/// chain backend; only an absent `/Prev` keeps the existing single-table
+/// [`DocumentAccessBackend::ClassicXref`] report.
 fn classic_spine(
     input: &[u8],
     startxref: PdfStartXref,
 ) -> Result<DocumentAccess, DocumentAccessError> {
     let xref_table = inspect_classic_xref_table(input, startxref.byte_offset)
         .map_err(|error| access_error(input, DocumentAccessRejection::XrefTable { error }))?;
+
+    if inspect_classic_xref_trailer_prev(input, xref_table.trailer_byte_offset)
+        .map_err(|error| access_error(input, DocumentAccessRejection::TrailerPrev { error }))?
+        .is_some()
+    {
+        return classic_chain_spine(input, startxref);
+    }
 
     let trailer_root = inspect_classic_xref_trailer_root(input, xref_table.trailer_byte_offset)
         .map_err(|error| access_error(input, DocumentAccessRejection::TrailerRoot { error }))?;
@@ -497,6 +529,39 @@ fn classic_spine(
             xref_table,
             trailer_root,
         },
+        root_reference,
+        catalog: walk.catalog,
+        catalog_pages: walk.catalog_pages,
+        page_tree_root: walk.page_tree_root,
+        page_leaves: walk.page_leaves,
+    })
+}
+
+/// Compose the spine over a merged classic cross-reference table `/Prev` chain.
+fn classic_chain_spine(
+    input: &[u8],
+    startxref: PdfStartXref,
+) -> Result<DocumentAccess, DocumentAccessError> {
+    let chain = build_classic_xref_chain(input, startxref.byte_offset).map_err(|error| {
+        access_error(
+            input,
+            DocumentAccessRejection::ClassicXrefChain {
+                error: Box::new(error),
+            },
+        )
+    })?;
+    let root_reference = chain.root_reference;
+
+    let walk = walk_spine(
+        input,
+        ObjectLookup::ClassicXrefChain(&chain),
+        root_reference,
+    )?;
+
+    Ok(DocumentAccess {
+        byte_len: input.len(),
+        startxref,
+        backend: DocumentAccessBackend::ClassicXrefChain { chain },
         root_reference,
         catalog: walk.catalog,
         catalog_pages: walk.catalog_pages,

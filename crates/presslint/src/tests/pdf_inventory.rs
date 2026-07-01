@@ -139,6 +139,55 @@ fn xref_stream_incremental_single_page_pdf() -> Result<Vec<u8>, String> {
     Ok(source)
 }
 
+fn classic_incremental_single_page_pdf() -> Vec<u8> {
+    let prefix = b"%PDF-1.7\n";
+    let catalog = b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n";
+    let pages = b"2 0 obj\n<< /Type /Pages /Kids [ 3 0 R ] /Count 1 >>\nendobj\n";
+    let page = b"3 0 obj\n<< /Type /Page /Parent 2 0 R /Contents 4 0 R >>\nendobj\n";
+    let old_content = b"4 0 obj\n<< /Length 1 >>\nstream\nq\nendstream\nendobj\n";
+
+    let catalog_offset = prefix.len();
+    let pages_offset = catalog_offset + catalog.len();
+    let page_offset = pages_offset + pages.len();
+    let old_content_offset = page_offset + page.len();
+    let old_xref_offset = old_content_offset + old_content.len();
+
+    let mut source = prefix.to_vec();
+    source.extend_from_slice(catalog);
+    source.extend_from_slice(pages);
+    source.extend_from_slice(page);
+    source.extend_from_slice(old_content);
+
+    source.extend_from_slice(b"xref\n0 5\n");
+    source.extend_from_slice(b"0000000000 65535 f \n");
+    for offset in [
+        catalog_offset,
+        pages_offset,
+        page_offset,
+        old_content_offset,
+    ] {
+        source.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    source.extend_from_slice(b"trailer\n<< /Size 5 /Root 1 0 R >>\n");
+
+    let updated = vector_content();
+    let new_content_offset = source.len();
+    source.extend_from_slice(
+        format!("4 0 obj\n<< /Length {} >>\nstream\n", updated.len()).as_bytes(),
+    );
+    source.extend_from_slice(updated);
+    source.extend_from_slice(b"\nendstream\nendobj\n");
+
+    let new_xref_offset = source.len();
+    source.extend_from_slice(b"xref\n4 1\n");
+    source.extend_from_slice(format!("{new_content_offset:010} 00000 n \n").as_bytes());
+    source.extend_from_slice(
+        format!("trailer\n<< /Size 5 /Root 1 0 R /Prev {old_xref_offset} >>\n").as_bytes(),
+    );
+    source.extend_from_slice(format!("startxref\n{new_xref_offset}\n%%EOF\n").as_bytes());
+    source
+}
+
 fn round_trip<T>(value: &T) -> Result<(), String>
 where
     T: Serialize + DeserializeOwned + PartialEq + std::fmt::Debug,
@@ -210,6 +259,22 @@ fn neutral_bridge_matches_classic_bridge_for_classic_xref() -> Result<(), String
 #[test]
 fn inventories_two_section_xref_stream_incremental_update() -> Result<(), String> {
     let source = xref_stream_incremental_single_page_pdf()?;
+
+    let report = build_pdf_inventory(&source, 1024).map_err(|error| format!("{error:?}"))?;
+
+    assert_eq!(report.pages.len(), 1);
+    assert_eq!(
+        report.pages[0].result,
+        PdfInventoryPageResult::Inventoried { entry_count: 1 }
+    );
+    assert_eq!(report.inventory.len(), 1);
+    assert_eq!(report.inventory.entries[0].kind, ObjectKind::Vector);
+    Ok(())
+}
+
+#[test]
+fn inventories_two_section_classic_incremental_update() -> Result<(), String> {
+    let source = classic_incremental_single_page_pdf();
 
     let report = build_pdf_inventory(&source, 1024).map_err(|error| format!("{error:?}"))?;
 

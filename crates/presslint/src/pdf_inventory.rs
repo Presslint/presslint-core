@@ -182,9 +182,10 @@ pub enum PdfInventoryRejection {
 /// document-access spine.
 ///
 /// The bridge accepts borrowed PDF bytes and never mutates them. It supports a
-/// classic-xref backend, one `/Type /XRef` stream backend, and bounded
-/// same-type xref-stream `/Prev` chains selected by [`inspect_document_access`],
-/// then locates page content-stream data extents through
+/// classic-xref backend, bounded same-type classic-table `/Prev` chains, one
+/// `/Type /XRef` stream backend, and bounded same-type xref-stream `/Prev`
+/// chains selected by [`inspect_document_access`], then locates page
+/// content-stream data extents through
 /// [`inspect_document_page_content_extents_with_lookup`].
 ///
 /// Raw streams are passed to syntax and inventory as borrowed slices. Flate
@@ -215,6 +216,7 @@ pub fn build_pdf_inventory(
         DocumentAccessBackend::ClassicXref { xref_table, .. } => {
             ObjectLookup::ClassicXref(xref_table)
         }
+        DocumentAccessBackend::ClassicXrefChain { chain } => ObjectLookup::ClassicXrefChain(chain),
         DocumentAccessBackend::XrefStreamSection { section } => {
             ObjectLookup::XrefStreamSection(section)
         }
