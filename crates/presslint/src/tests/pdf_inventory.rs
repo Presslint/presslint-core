@@ -390,3 +390,41 @@ fn neutral_public_surface_accepts_classic_fixture_helper() -> Result<(), PdfInve
     assert_eq!(report.pages.len(), 1);
     Ok(())
 }
+
+#[test]
+fn real_pdf_do_operators_become_image_and_form_inventory_entries() -> Result<(), String> {
+    let source = classic_pdf(&[
+        b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n",
+        b"2 0 obj\n<< /Type /Pages /Kids [ 3 0 R ] /Count 1 >>\nendobj\n",
+        b"3 0 obj\n<< /Type /Page /Parent 2 0 R /Resources << /XObject << /Im 5 0 R /Fm 6 0 R >> >> /Contents 4 0 R >>\nendobj\n",
+        b"4 0 obj\n<< /Length 13 >>\nstream\n/Im Do /Fm Do\nendstream\nendobj\n",
+        b"5 0 obj\n<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /BitsPerComponent 8 >>\nstream\nx\nendstream\nendobj\n",
+        b"6 0 obj\n<< /Type /XObject /Subtype /Form /Length 1 >>\nstream\nq\nendstream\nendobj\n",
+    ]);
+
+    let neutral = build_pdf_inventory(&source, 1024).map_err(|error| format!("{error:?}"))?;
+    let classic =
+        build_classic_pdf_inventory(&source, 1024).map_err(|error| format!("{error:?}"))?;
+
+    assert_eq!(neutral.xobject_resource_error, None);
+    assert!(neutral.pages[0].xobject_resource_skipped.is_empty());
+    assert_eq!(
+        neutral.pages[0].result,
+        PdfInventoryPageResult::Inventoried { entry_count: 2 }
+    );
+    assert_eq!(
+        neutral
+            .inventory
+            .entries
+            .iter()
+            .map(|entry| entry.kind)
+            .collect::<Vec<_>>(),
+        vec![ObjectKind::Image, ObjectKind::FormXObject]
+    );
+    assert_eq!(classic.inventory, neutral.inventory);
+    assert_eq!(
+        classic.pages[0].result,
+        ClassicPdfInventoryPageResult::Inventoried { entry_count: 2 }
+    );
+    Ok(())
+}

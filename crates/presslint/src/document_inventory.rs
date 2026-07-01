@@ -10,7 +10,7 @@ use presslint_pdf::{
     inspect_classic_document_access, inspect_document_page_content_extents,
 };
 use presslint_syntax::{AssembleError, TokenizeError, assemble_operators, tokenize};
-use presslint_types::{ContentScope, PageIndex};
+use presslint_types::{ContentScope, PageIndex, PdfName};
 use serde::{Deserialize, Serialize};
 
 use crate::page_content::page_content_bytes;
@@ -26,6 +26,9 @@ pub struct ClassicPdfInventory {
     pub byte_len: usize,
     /// Combined inventory for all pages that this bridge could build.
     pub inventory: Inventory,
+    /// Non-fatal page `XObject` resource inspection failure, when the resource
+    /// pass could not begin.
+    pub xobject_resource_error: Option<presslint_pdf::DocumentPageXObjectResourcesInspectionError>,
     /// One document-ordered result for each enumerated page.
     pub pages: Vec<ClassicPdfInventoryPage>,
 }
@@ -37,6 +40,8 @@ pub struct ClassicPdfInventoryPage {
     pub page_index: PageIndex,
     /// Page inventory result or structured skip.
     pub result: ClassicPdfInventoryPageResult,
+    /// Page-local `XObject` resource diagnostics.
+    pub xobject_resource_skipped: Vec<presslint_pdf::SkippedPageXObjectResource>,
 }
 
 /// Inventory result for one page.
@@ -190,9 +195,8 @@ pub enum ClassicPdfInventoryRejection {
 /// streams allocate only the bounded decoded buffer returned by
 /// [`presslint_pdf::decode_flate_stream`]. Multiple decoded streams are joined
 /// with an explicit whitespace separator into one bounded synthetic page
-/// content buffer before tokenization. Resource dictionaries are not inspected
-/// in this slice, so empty image and form `XObject` name lists are supplied to
-/// the combined inventory builder.
+/// content buffer before tokenization. Page `XObject` resources are inspected
+/// structurally when available so image/form `Do` invocations can be classified.
 ///
 /// Page indexes in the returned report are zero-based document-order ordinals.
 ///
@@ -226,12 +230,37 @@ pub fn build_classic_pdf_inventory(
             },
         )
     })?;
+    let xobject_resources = presslint_pdf::inspect_document_page_xobject_resources(
+        input,
+        &access.xref_table,
+        access.page_tree_root.object_byte_offset,
+    );
+    let (xobject_resource_error, xobject_pages) = match xobject_resources {
+        Ok(report) => (None, Some(report.pages)),
+        Err(error) => (Some(error), None),
+    };
 
     let mut inventory = Inventory::default();
     let mut pages = Vec::with_capacity(extents.pages.len());
     for page in &extents.pages {
         let page_index = page_index_error(input, page.ordinal)?;
-        let result = match build_page_inventory(input, page, page_index, max_decoded_stream_bytes) {
+        let resources = xobject_pages
+            .as_ref()
+            .and_then(|pages| pages.get(page.ordinal));
+        let image_xobject_names = resources.map_or_else(Vec::new, |resources| {
+            inventory_names(&resources.image_xobject_names)
+        });
+        let form_xobject_names = resources.map_or_else(Vec::new, |resources| {
+            inventory_names(&resources.form_xobject_names)
+        });
+        let result = match build_page_inventory(
+            input,
+            page,
+            page_index,
+            max_decoded_stream_bytes,
+            &image_xobject_names,
+            &form_xobject_names,
+        ) {
             Ok(page_inv) => {
                 let entry_count = page_inv.len();
                 inventory.entries.extend(page_inv.entries);
@@ -241,12 +270,18 @@ pub fn build_classic_pdf_inventory(
                 reason: reason.into(),
             },
         };
-        pages.push(ClassicPdfInventoryPage { page_index, result });
+        pages.push(ClassicPdfInventoryPage {
+            page_index,
+            result,
+            xobject_resource_skipped: resources
+                .map_or_else(Vec::new, |resources| resources.skipped.clone()),
+        });
     }
 
     Ok(ClassicPdfInventory {
         byte_len: input.len(),
         inventory,
+        xobject_resource_error,
         pages,
     })
 }
@@ -256,6 +291,8 @@ pub fn build_page_inventory(
     page: &DocumentPageContentExtentInspection,
     page_index: PageIndex,
     max_decoded_stream_bytes: usize,
+    image_xobject_names: &[PdfName],
+    form_xobject_names: &[PdfName],
 ) -> Result<Inventory, InventoryPageSkip> {
     let extents = match &page.result {
         DocumentPageContentExtentResult::Inspected { extents, .. } => extents,
@@ -298,8 +335,8 @@ pub fn build_page_inventory(
         &assembled.records,
         page_index,
         &ContentScope::Page,
-        &[],
-        &[],
+        image_xobject_names,
+        form_xobject_names,
     )
     .map_err(|error| InventoryPageSkip::GraphicsWalkFailed {
         object_byte_offset: first_stream_offset,
@@ -457,6 +494,10 @@ fn page_index_error(input: &[u8], ordinal: usize) -> Result<PageIndex, ClassicPd
             ClassicPdfInventoryRejection::PageIndexOutOfRange { ordinal },
         )
     })
+}
+
+pub fn inventory_names(names: &[presslint_pdf::PdfName]) -> Vec<PdfName> {
+    names.iter().map(|name| PdfName(name.0.clone())).collect()
 }
 
 const fn inventory_error(

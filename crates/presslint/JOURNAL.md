@@ -1,5 +1,35 @@
 # presslint Journal
 
+## T107 - Page `XObject` Resources in Real-PDF Inventory
+
+- `build_pdf_inventory` now runs the new page `XObject` resource inspector
+  through the same `ObjectLookup` backend selected by `inspect_document_access`,
+  then passes each page's classified image/form resource-name lists into the
+  existing combined `presslint_inventory::build_inventory` path. Real page-scope
+  `/Im Do` and `/Fm Do` operators now produce image and form inventory entries
+  when the page resources classify them as `/Subtype /Image` or `/Subtype /Form`.
+- `build_classic_pdf_inventory` gets the same behavior via the classic
+  `inspect_document_page_xobject_resources` wrapper. A shared page helper still
+  decodes/tokenizes/builds inventory once per page, now with caller-supplied
+  image/form name slices.
+- Resource inspection is non-fatal for text/vector inventory. If the document
+  resource pass cannot begin, the report records `xobject_resource_error` and
+  pages inventory with empty image/form lists. Per-page resource diagnostics are
+  exposed as `xobject_resource_skipped` on each page report.
+- Duplicate raw names in a page's direct `/XObject` dictionary are surfaced as
+  page-local diagnostics by `presslint-pdf`; the bridge receives disjoint
+  image/form resource-name lists, with the first duplicate occurrence winning
+  deterministically.
+- Copy budget: raw content streams stay borrowed, Flate streams allocate only
+  bounded decoded buffers, multi-stream pages allocate only the bounded joined
+  content buffer, and the new resource bridge converts small raw PDF resource
+  names into shared inventory `PdfName` values. No PDF source bytes, object
+  bodies, resource dictionaries, image streams, or decoded image data are
+  retained.
+- Deferred: no Form XObject content recursion, no image pixel/filter/color-space
+  inspection, no indirect `/XObject` subdictionary support, and no object-stream
+  resolution beyond the existing structural lookup behavior.
+
 ## T106 - Document-Level Selector Query Over PDF Inventory
 
 - Added `query_pdf_inventory(input, selector, max_decoded_stream_bytes)` in the

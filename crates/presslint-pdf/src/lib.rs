@@ -42,12 +42,14 @@ mod object_stream;
 mod page_content_extents;
 mod page_content_targets;
 mod page_contents;
+mod page_resource_inheritance;
 mod page_tree_kid_targets;
 mod page_tree_kids;
 mod page_tree_leaves;
 mod page_tree_node;
 mod page_tree_node_type;
 mod page_tree_reference;
+mod page_xobject_resources;
 mod source;
 mod source_utils;
 mod startxref;
@@ -195,6 +197,12 @@ pub use page_tree_reference::{
     PageTreeReferenceTargetInspection, PageTreeReferenceTargetInspectionError,
     PageTreeReferenceTargetInspectionRejection, inspect_page_tree_reference_target,
     inspect_page_tree_reference_target_with_lookup,
+};
+pub use page_xobject_resources::{
+    DocumentPageXObjectResourcesInspection, DocumentPageXObjectResourcesInspectionError,
+    PageXObjectResourcesInspection, PdfName, SkippedPageXObjectResource,
+    SkippedPageXObjectResourceReason, inspect_document_page_xobject_resources,
+    inspect_document_page_xobject_resources_with_lookup,
 };
 pub use source::{
     PDF_HEADER_SCAN_LIMIT, PdfHeader, PdfSourceDiagnostic, PdfSourceInspection,

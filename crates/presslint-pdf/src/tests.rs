@@ -30,6 +30,7 @@ mod page_tree_leaves;
 mod page_tree_node;
 mod page_tree_node_type;
 mod page_tree_reference;
+mod page_xobject_resources;
 mod source;
 mod stream_decode;
 mod trailer;

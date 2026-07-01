@@ -4,6 +4,43 @@ Older accumulated journal history lives in [JOURNAL-archive.md](JOURNAL-archive.
 
 ## Current State
 
+### T107 - Page `XObject` Resource Classification
+
+- Added `inspect_document_page_xobject_resources_with_lookup(input, lookup,
+  root_node_object_offset)` plus the classic wrapper
+  `inspect_document_page_xobject_resources(input, xref, root_node_object_offset)`.
+  The walk is backend-neutral over the existing `ObjectLookup` variants and
+  keeps classic behavior as a thin wrapper through `ObjectLookup::ClassicXref`.
+- The inspector walks the page tree root-down in document order, carrying the
+  effective inheritable `/Resources` dictionary. A child `/Pages` or `/Page`
+  `/Resources` entry replaces the inherited dictionary for this slice; an absent
+  child entry keeps the inherited dictionary.
+- It classifies only direct `/XObject` resource dictionary entries whose values
+  are indirect references resolving to dictionary-bodied objects with
+  `/Subtype /Image` or `/Subtype /Form`. Per-page image/form name vectors are
+  sorted and deduplicated for deterministic inventory input.
+- Malformed, missing, unknown, non-reference, unresolved, generation-mismatched,
+  duplicate-key, and non-dictionary resource shapes are reported as structured
+  per-page `SkippedPageXObjectResource` diagnostics. Page-tree child failures
+  remain ordered traversal skips rather than panics.
+- Duplicate raw names inside a direct `/XObject` dictionary now emit
+  `DuplicateXObjectName`; the first occurrence is the only one classified, so a
+  conflicting repeated resource name cannot appear in both image and form name
+  lists.
+- Resource inheritance, replacement, reference resolution, and shared
+  unique-entry helpers live in `page_resource_inheritance.rs`, keeping the
+  public inspector module below the 800-line review gate while preserving the
+  same public API re-exports.
+- Copy budget: the source bytes, dictionaries, object bodies, stream bodies, and
+  decoded data stay unretained. Owned output is limited to raw resource-name
+  byte vectors, small skip records, copied dictionary-entry byte ranges, and
+  delegated structural metadata. The traversal reuses the caller-provided
+  `ObjectLookup` and builds no document object cache.
+- Deferred: no recursion into Form XObject content streams, no image pixel or
+  stream-parameter inspection, no object-stream/type-2 resolution beyond the
+  existing lookup behavior, and no support for indirect `/XObject`
+  subdictionaries in this slice.
+
 ### T104 - Classic-Table `/Prev` Chain Object Map
 
 - Added `build_classic_xref_chain(input, startxref_byte_offset)`, the classic

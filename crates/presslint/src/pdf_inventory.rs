@@ -8,11 +8,14 @@ use presslint_pdf::{
     FlateDecodeParametersResolution, FlateDecodeParametersResolutionError, FlateDecodeStreamError,
     ObjectLookup, SkippedPageContentTargetReason, inspect_document_access,
     inspect_document_page_content_extents_with_lookup,
+    inspect_document_page_xobject_resources_with_lookup,
 };
 use presslint_types::PageIndex;
 use serde::{Deserialize, Serialize};
 
-use crate::document_inventory::{InventoryPageSkip, build_page_inventory, page_index};
+use crate::document_inventory::{
+    InventoryPageSkip, build_page_inventory, inventory_names, page_index,
+};
 
 /// Result of building inventory from a backend-neutral PDF.
 ///
@@ -25,6 +28,9 @@ pub struct PdfInventory {
     pub byte_len: usize,
     /// Combined inventory for all pages that this bridge could build.
     pub inventory: Inventory,
+    /// Non-fatal page `XObject` resource inspection failure, when the resource
+    /// pass could not begin.
+    pub xobject_resource_error: Option<presslint_pdf::DocumentPageXObjectResourcesInspectionError>,
     /// One document-ordered result for each enumerated page.
     pub pages: Vec<PdfInventoryPage>,
 }
@@ -36,6 +42,8 @@ pub struct PdfInventoryPage {
     pub page_index: PageIndex,
     /// Page inventory result or structured skip.
     pub result: PdfInventoryPageResult,
+    /// Page-local `XObject` resource diagnostics.
+    pub xobject_resource_skipped: Vec<presslint_pdf::SkippedPageXObjectResource>,
 }
 
 /// Inventory result for one page.
@@ -192,9 +200,8 @@ pub enum PdfInventoryRejection {
 /// Flate streams allocate only the bounded decoded buffer returned by
 /// [`presslint_pdf::decode_flate_stream`]. Multiple decoded streams are joined
 /// with an explicit whitespace separator into one bounded synthetic page
-/// content buffer before tokenization. Resource dictionaries are not inspected
-/// in this slice, so empty image and form `XObject` name lists are supplied to
-/// the combined inventory builder by the shared page helper.
+/// content buffer before tokenization. Page `XObject` resources are inspected
+/// structurally when available so image/form `Do` invocations can be classified.
 ///
 /// # Errors
 ///
@@ -237,6 +244,15 @@ pub fn build_pdf_inventory(
             },
         )
     })?;
+    let xobject_resources = inspect_document_page_xobject_resources_with_lookup(
+        input,
+        lookup,
+        access.page_tree_root.object_byte_offset,
+    );
+    let (xobject_resource_error, xobject_pages) = match xobject_resources {
+        Ok(report) => (None, Some(report.pages)),
+        Err(error) => (Some(error), None),
+    };
 
     let mut inventory = Inventory::default();
     let mut pages = Vec::with_capacity(extents.pages.len());
@@ -247,7 +263,23 @@ pub fn build_pdf_inventory(
                 PdfInventoryRejection::PageIndexOutOfRange { ordinal },
             )
         })?;
-        let result = match build_page_inventory(input, page, page_index, max_decoded_stream_bytes) {
+        let resources = xobject_pages
+            .as_ref()
+            .and_then(|pages| pages.get(page.ordinal));
+        let image_xobject_names = resources.map_or_else(Vec::new, |resources| {
+            inventory_names(&resources.image_xobject_names)
+        });
+        let form_xobject_names = resources.map_or_else(Vec::new, |resources| {
+            inventory_names(&resources.form_xobject_names)
+        });
+        let result = match build_page_inventory(
+            input,
+            page,
+            page_index,
+            max_decoded_stream_bytes,
+            &image_xobject_names,
+            &form_xobject_names,
+        ) {
             Ok(page_inv) => {
                 let entry_count = page_inv.len();
                 inventory.entries.extend(page_inv.entries);
@@ -257,12 +289,18 @@ pub fn build_pdf_inventory(
                 reason: reason.into(),
             },
         };
-        pages.push(PdfInventoryPage { page_index, result });
+        pages.push(PdfInventoryPage {
+            page_index,
+            result,
+            xobject_resource_skipped: resources
+                .map_or_else(Vec::new, |resources| resources.skipped.clone()),
+        });
     }
 
     Ok(PdfInventory {
         byte_len: input.len(),
         inventory,
+        xobject_resource_error,
         pages,
     })
 }
