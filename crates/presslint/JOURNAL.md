@@ -1,5 +1,73 @@
 # presslint Journal
 
+## T108 - Ablation
+
+- Doc-accuracy only, no behavior change: the `PreflightReason::UnmodeledOrUnresolvedColorSpace`
+  doc listed the review-severity color spaces but omitted `CalGray`, which the
+  wildcard match arm already routes to review; added it so the doc matches the
+  code. The `DeviceCmyk | DeviceGray => None` arm and every other arm are unchanged.
+- Added `pure_gray_page_passes_with_no_findings`, a focused test that pins the
+  previously-untested `DeviceGray` half of the `DeviceCmyk | DeviceGray => None`
+  pass-compatible arm (the CMYK half was already covered), protecting that
+  simplification from regression.
+
+## T108 - Read-Only `check_no_rgb_in_print` Preflight Over PDF Inventory
+
+- Added `check_no_rgb_in_print(input, max_decoded_stream_bytes) -> PreflightReport`
+  in the new `preflight.rs` module: the first real user-facing prepress
+  deliverable. It builds the neutral inventory with `build_pdf_inventory`
+  verbatim, then scans `report.inventory.entries` once and applies a fixed
+  color policy. This is READ-ONLY: it lives in the umbrella crate, NOT
+  `presslint-actions`; it plans nothing and mutates nothing.
+- New public surface: `PreflightReport { check, status, findings, inventory }`,
+  `PreflightStatus` (`Pass | Fail | NeedsReview`), `PreflightCheck`
+  (`NoRgbInPrint`), `PreflightSeverity` (`Error | Review`), `PreflightReason`
+  (`RgbDeviceColor | UnmodeledOrUnresolvedColorSpace | CoverageIncomplete`),
+  and `PreflightFinding`.
+- Pass/review/fail partition (the check owns this policy, it is not a thin
+  selector wrapper): `DeviceRgb` in any marking observation is the only
+  `Error` (`RgbDeviceColor`) and forces `Fail`. `DeviceCmyk` and `DeviceGray`
+  are pass-compatible and emit no finding. Every other observed `ColorSpace`
+  (`IccBased`, `CalRgb`, `Lab`, `Indexed`, `Separation`, `DeviceN`, `Pattern`,
+  `Resource(_)`, `Unknown` on a non-image observation) is a `Review`
+  (`UnmodeledOrUnresolvedColorSpace`). A marking object with multiple
+  observations (fill + stroke) is scanned per observation, one finding per
+  offending observation, in observation order, so `usage`/`color_space` stay
+  precise.
+- Status aggregation is exactly: `Fail` if any `Error`; else `NeedsReview` if
+  any `Review` finding OR coverage gap (all coverage gaps are `Review`
+  severity); else `Pass`. A clean `Pass` means "no observed DeviceRGB in
+  inventoried marking content AND no review/coverage blocker", subject to the
+  recorded coverage limits — it does NOT claim "no RGB anywhere".
+- Three coverage-honesty signals, all `CoverageIncomplete`/`Review`: (a) every
+  page whose `PdfInventoryPageResult` is `Skipped`; (b) every image observation
+  modeled as `Unknown` (image color is not decoded yet); (c) one signal per
+  `FormXObject` entry, because nested form content is not walked so RGB inside a
+  form is currently invisible.
+- Coverage-finding representation: object-anchored fields
+  (`object`, `entry_index`, `kind`, `usage`, `color_space`) are `Option` and
+  populated only for entry-anchored findings. Per-object color findings and the
+  image-`Unknown` coverage finding carry all of them; the form coverage finding
+  carries `object`/`entry_index`/`kind` but no color observation
+  (`usage`/`color_space` are `None`); a skipped-page coverage finding carries
+  only the page.
+- Determinism: `collect_findings` walks pages in document order and entries in
+  content order in lockstep, using each `Inventoried { entry_count }` to bound a
+  page's contiguous entry run, so skipped-page and per-object findings interleave
+  in strict document/page/entry/observation order in a single pass.
+- Copy budget: the full `PdfInventory` is moved into `PreflightReport.inventory`
+  exactly once (scanned by borrow, never cloned; no matched-entry clones).
+  Findings own only `Copy`/enum discriminants plus a cloned `ObjectId` (small,
+  no source bytes) and a cloned `ColorSpace` (scalar, or the `Resource` name it
+  already carries). `ColorObservation.components`, decoded streams, and PDF
+  source bytes are never copied into findings.
+- No new benchmark target: this is a build-once + scan-once aggregation over the
+  already-timed inventory build path, the same shape as `query_pdf_inventory`;
+  selector/inventory throughput is already covered by existing Criterion benches.
+- Next queue after ACT: FORM (Form `XObject` recursion + ACT hardening so RGB
+  inside forms is caught), then IMG (image `/Width`/`/Height`/`/BitsPerComponent`/
+  `/ColorSpace`), then S-a, the Y2 design note + Y2, then F3 (#29) design notes.
+
 ## T107 - Page `XObject` Resources in Real-PDF Inventory
 
 - `build_pdf_inventory` now runs the new page `XObject` resource inspector

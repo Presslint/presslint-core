@@ -18,6 +18,7 @@ mod document_inventory;
 mod page_content;
 mod pdf_inventory;
 mod pdf_query;
+mod preflight;
 
 pub use presslint_types::*;
 
@@ -31,6 +32,10 @@ pub use pdf_inventory::{
     PdfInventoryRejection, PdfInventorySkip, build_pdf_inventory,
 };
 pub use pdf_query::{PdfInventoryMatch, PdfInventoryQuery, query_pdf_inventory};
+pub use preflight::{
+    PreflightCheck, PreflightFinding, PreflightReason, PreflightReport, PreflightSeverity,
+    PreflightStatus, check_no_rgb_in_print,
+};
 
 pub use presslint_actions as actions;
 pub use presslint_color as color;
