@@ -83,7 +83,15 @@ fn located_stream(
     }
 }
 
-fn decode_content<'input>(
+/// Decode one located content-stream extent into borrowed or bounded-owned
+/// bytes through the shared page filter/decode machinery.
+///
+/// This is the single-stream decode helper reused by the form-expansion bridge
+/// so a Form `XObject` stream is decoded through exactly the same
+/// `/Filter`/`/DecodeParms`/`FlateDecode` path and the same
+/// `max_decoded_stream_bytes` bound as page content. Raw streams stay borrowed;
+/// a `/FlateDecode` stream allocates only the existing bounded decoded buffer.
+pub fn decode_content<'input>(
     input: &'input [u8],
     object_byte_offset: usize,
     extent: &presslint_pdf::ContentStreamDataExtentInspection,

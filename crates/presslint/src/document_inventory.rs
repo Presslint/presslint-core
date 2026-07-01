@@ -1,19 +1,21 @@
 //! Public bridge from classic-xref PDF bytes to page-object inventory.
 
-use presslint_inventory::{GraphicsWalkError, Inventory, build_inventory};
+use presslint_inventory::{GraphicsWalkError, Inventory};
 use presslint_pdf::{
     ContentStreamDataExtentInspectionError, ContentStreamDataSliceError,
     ContentStreamFilterClassification, ContentStreamFilterClassificationError,
     DocumentPageContentExtentInspection, DocumentPageContentExtentResult,
     DocumentPageContentExtentsInspectionError, FlateDecodeParametersResolution,
-    FlateDecodeParametersResolutionError, FlateDecodeStreamError, SkippedPageContentTargetReason,
-    inspect_classic_document_access, inspect_document_page_content_extents,
+    FlateDecodeParametersResolutionError, FlateDecodeStreamError, ObjectLookup,
+    SkippedPageContentTargetReason, inspect_classic_document_access,
+    inspect_document_page_content_extents,
 };
-use presslint_syntax::{AssembleError, TokenizeError, assemble_operators, tokenize};
-use presslint_types::{ContentScope, PageIndex, PdfName};
+use presslint_syntax::{AssembleError, TokenizeError};
+use presslint_types::{PageIndex, PdfName};
 use serde::{Deserialize, Serialize};
 
-use crate::page_content::page_content_bytes;
+use crate::form_inventory::{FormWalkContext, build_page_inventory_with_forms};
+use crate::page_content::{PageContentBytes, page_content_bytes};
 
 /// Result of building inventory from a classic-xref PDF.
 ///
@@ -240,6 +242,7 @@ pub fn build_classic_pdf_inventory(
         Err(error) => (Some(error), None),
     };
 
+    let lookup = ObjectLookup::ClassicXref(&access.xref_table);
     let mut inventory = Inventory::default();
     let mut pages = Vec::with_capacity(extents.pages.len());
     for page in &extents.pages {
@@ -253,17 +256,22 @@ pub fn build_classic_pdf_inventory(
         let form_xobject_names = resources.map_or_else(Vec::new, |resources| {
             inventory_names(&resources.form_xobject_names)
         });
-        let result = match build_page_inventory(
+        let form_targets =
+            resources.map_or(&[][..], |resources| resources.form_xobjects.as_slice());
+        let result = match build_page_inventory_with_forms(
             input,
+            lookup,
             page,
             page_index,
             max_decoded_stream_bytes,
             &image_xobject_names,
             &form_xobject_names,
+            form_targets,
+            FormWalkContext::one_level(),
         ) {
-            Ok(page_inv) => {
-                let entry_count = page_inv.len();
-                inventory.entries.extend(page_inv.entries);
+            Ok(expanded) => {
+                let entry_count = expanded.inventory.len();
+                inventory.entries.extend(expanded.inventory.entries);
                 ClassicPdfInventoryPageResult::Inventoried { entry_count }
             }
             Err(reason) => ClassicPdfInventoryPageResult::Skipped {
@@ -286,14 +294,17 @@ pub fn build_classic_pdf_inventory(
     })
 }
 
-pub fn build_page_inventory(
-    input: &[u8],
+/// Decode a page's located content streams into borrowed or bounded-owned bytes,
+/// returning the assembled page-content buffer and the first stream's object
+/// byte offset for diagnostic attribution.
+///
+/// This is the shared front half of page inventory: both the page-only path and
+/// the form-expansion path decode page content the same way before tokenizing.
+pub fn decode_page_content<'input>(
+    input: &'input [u8],
     page: &DocumentPageContentExtentInspection,
-    page_index: PageIndex,
     max_decoded_stream_bytes: usize,
-    image_xobject_names: &[PdfName],
-    form_xobject_names: &[PdfName],
-) -> Result<Inventory, InventoryPageSkip> {
+) -> Result<(PageContentBytes<'input>, usize), InventoryPageSkip> {
     let extents = match &page.result {
         DocumentPageContentExtentResult::Inspected { extents, .. } => extents,
         DocumentPageContentExtentResult::ContentsFailed { error } => {
@@ -320,30 +331,7 @@ pub fn build_page_inventory(
         })
         .unwrap_or_default();
     let content = page_content_bytes(input, &extents.entries, max_decoded_stream_bytes)?;
-    let source = content.as_slice();
-    let tokens = tokenize(source).map_err(|error| InventoryPageSkip::TokenizeFailed {
-        object_byte_offset: first_stream_offset,
-        error,
-    })?;
-    let assembled =
-        assemble_operators(&tokens).map_err(|error| InventoryPageSkip::AssembleFailed {
-            object_byte_offset: first_stream_offset,
-            error,
-        })?;
-    let inventory = build_inventory(
-        source,
-        &assembled.records,
-        page_index,
-        &ContentScope::Page,
-        image_xobject_names,
-        form_xobject_names,
-    )
-    .map_err(|error| InventoryPageSkip::GraphicsWalkFailed {
-        object_byte_offset: first_stream_offset,
-        error,
-    })?;
-
-    Ok(inventory)
+    Ok((content, first_stream_offset))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

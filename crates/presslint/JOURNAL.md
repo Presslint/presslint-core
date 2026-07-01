@@ -1,5 +1,81 @@
 # presslint Journal
 
+## T110 - One-Level Form `XObject` Content Inventory (FORM 11a)
+
+- Added `form_inventory` module owning the recursion and merge for one-level
+  Form `XObject` content expansion. `build_page_inventory_with_forms(input,
+  lookup, page, page_index, max_decoded_stream_bytes, page_image_names,
+  page_form_names, form_targets, FormWalkContext) -> FormExpandedInventory {
+  inventory, form_skipped }` decodes/tokenizes/assembles/inventories the page
+  exactly like the page-only path, then for each page-level form invocation
+  entry walks the form's OWN decoded content one level deep and merges the
+  nested entries immediately after the invocation entry.
+- Physical flow (all in `presslint`): take each page-level form invocation's
+  `PageXObjectResourceTarget` -> locate the form stream via
+  `inspect_content_stream_data_extent_with_lookup(input, Some(lookup),
+  object_byte_offset)` -> decode through the SAME single-stream
+  filter/`/DecodeParms`/`FlateDecode` machinery (the newly `pub` `decode_content`
+  helper in `page_content.rs`, bounded by `max_decoded_stream_bytes`) ->
+  tokenize + assemble -> inspect the form's OWN `/Resources /XObject` via the
+  new `presslint-pdf` `inspect_form_xobject_resources` -> re-invoke
+  `build_inventory` on the decoded form bytes in `ContentScope::FormXObject {
+  name }` with the ORIGINAL invoking `page_index`.
+- ORIGINAL page index: nested entries are built with the invoking page's
+  `page_index`, so ACT/selectors see form-contained objects on the invoking
+  page. Verified by test (nested `id.page` / `provenance.page` == invoking page).
+- Sequence rebasing: page entries keep their content-order sequence `0..n-1`;
+  nested form entries are rebased onto a page-global counter that continues at
+  `n`, so nested sequences are monotonically increasing and never restart at 0.
+  A page with no form invocations continues to assign `0..n-1` and is
+  byte-for-byte unchanged (regression test). The nested-entry digest is still
+  computed from the form-local sequence inside `build_inventory` (its signature
+  is fixed and its digest helpers are private to `presslint-inventory`); only
+  `id.sequence` is rebased for page-global identity, which stays unique and
+  deterministic because the form name scope and form-local ranges disambiguate.
+- `FormWalkContext { max_depth, visited }` bounds the walk. For 11a
+  `max_depth = 1`. `visited` keys forms on the active descent path by resolved
+  `(object_number, generation)` plus byte offset, so a self-referential or
+  cyclic form is a `SkippedFormInventoryReason::Cycle` (checked before the depth
+  guard) rather than a page failure, panic, or infinite loop; a legitimate
+  nested form beyond the max depth is a `MaxDepth` skip. `visited` is inserted on
+  descent and removed on ascent, so its length is the current descent depth
+  (the depth guard reads `visited.len()`) and sibling re-invocations of the same
+  form are not false cycles. 11b only needs to raise `max_depth`.
+- Structured per-form skips: `SkippedFormInventory { name, reference,
+  object_byte_offset, reason }`. `reason` is `Cycle`, `MaxDepth`, or
+  `Content { skip: PdfInventorySkip }`, where the content path reuses the
+  existing `From<InventoryPageSkip>` conversion so unresolved / type-2 /
+  generation-mismatch (via the form stream extent), unsupported-filter, and
+  decode/tokenize/assemble/graphics-walk failures all become structured skips.
+  The page's own text/vector inventory is always produced even when a form is
+  skipped (tests cover self-ref cycle and unsupported filter).
+- Bridges: both `build_pdf_inventory` (neutral, derived `ObjectLookup`) and
+  `build_classic_pdf_inventory` (`ObjectLookup::ClassicXref`) route each page
+  through the shared `build_page_inventory_with_forms`, passing the page's
+  already-derived `form_xobjects` targets. The old page-only `build_page_inventory`
+  was folded into this path. The public `PdfInventory` / `ClassicPdfInventory`
+  report shapes and serde are UNCHANGED: form expansion enriches the merged
+  `inventory`; the per-form skip diagnostics are exposed through
+  `build_page_inventory_with_forms` (re-exported) for the later 11b/ACT slices
+  rather than added to the page report structs (which would have required
+  editing out-of-scope tests). `check_no_rgb_in_print` therefore now sees
+  DeviceRGB painted inside page-level forms without any `preflight.rs` change.
+- Performance: no new Criterion target. This is a build-once page walk plus one
+  bounded nested walk per page-level form that reuses the already-benchmarked
+  `build_inventory` and FlateDecode paths; the page hot loop is unchanged. The
+  form-name correlation does a second `walk_graphics_state` pass ONLY when the
+  page/form declares form resources (`form_names` non-empty), so pages without
+  forms keep a single walk. Raw form streams stay borrowed; a `/FlateDecode`
+  form allocates only the existing bounded decoded buffer. Report records retain
+  no PDF source bytes, object bodies, resource dictionaries, or decoded form
+  bytes; `FormWalkContext.visited` is a bounded `BTreeSet` of small `Copy` keys.
+- Deferred (out of scope here): 11b bounded recursive descent (raise
+  `max_depth`, descend nested forms), ACT status aggregation / surfacing
+  `form_skipped` in the page report, image pixel/dimension/color-space decode
+  (a form's image `Do` stays an `Unknown` image observation), `/BBox` / `/Matrix`
+  geometry, filter arrays/chains per form stream, object-stream/type-2
+  resolution, and annotation appearance streams.
+
 ## T108 - Ablation
 
 - Doc-accuracy only, no behavior change: the `PreflightReason::UnmodeledOrUnresolvedColorSpace`

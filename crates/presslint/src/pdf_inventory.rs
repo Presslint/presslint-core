@@ -13,9 +13,8 @@ use presslint_pdf::{
 use presslint_types::PageIndex;
 use serde::{Deserialize, Serialize};
 
-use crate::document_inventory::{
-    InventoryPageSkip, build_page_inventory, inventory_names, page_index,
-};
+use crate::document_inventory::{InventoryPageSkip, inventory_names, page_index};
+use crate::form_inventory::{FormWalkContext, build_page_inventory_with_forms};
 
 /// Result of building inventory from a backend-neutral PDF.
 ///
@@ -272,17 +271,22 @@ pub fn build_pdf_inventory(
         let form_xobject_names = resources.map_or_else(Vec::new, |resources| {
             inventory_names(&resources.form_xobject_names)
         });
-        let result = match build_page_inventory(
+        let form_targets =
+            resources.map_or(&[][..], |resources| resources.form_xobjects.as_slice());
+        let result = match build_page_inventory_with_forms(
             input,
+            lookup,
             page,
             page_index,
             max_decoded_stream_bytes,
             &image_xobject_names,
             &form_xobject_names,
+            form_targets,
+            FormWalkContext::one_level(),
         ) {
-            Ok(page_inv) => {
-                let entry_count = page_inv.len();
-                inventory.entries.extend(page_inv.entries);
+            Ok(expanded) => {
+                let entry_count = expanded.inventory.len();
+                inventory.entries.extend(expanded.inventory.entries);
                 PdfInventoryPageResult::Inventoried { entry_count }
             }
             Err(reason) => PdfInventoryPageResult::Skipped {

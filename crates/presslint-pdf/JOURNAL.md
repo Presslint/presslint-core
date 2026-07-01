@@ -4,6 +4,35 @@ Older accumulated journal history lives in [JOURNAL-archive.md](JOURNAL-archive.
 
 ## Current State
 
+### T110 - Single-Object Form `XObject` Resource Inspector
+
+- Added `form_xobject_resources` module with
+  `inspect_form_xobject_resources(input, lookup, object_byte_offset) ->
+  FormXObjectResourcesInspection`: the single-object counterpart to the
+  page-tree `inspect_document_page_xobject_resources`. It classifies exactly
+  one Form `XObject`'s own `/Resources /XObject` dictionary into sorted,
+  deduplicated `/Image` and `/Form` `PageXObjectResourceTarget`/`PdfName`
+  vectors plus structured `SkippedPageXObjectResource` diagnostics.
+- No page-resource inheritance: the form is scanned with
+  `ResourceContext::from_dictionary(.., None)`, so a form paints against its
+  OWN `/Resources` only. A missing form resource surfaces as `MissingResources`
+  rather than borrowing the invoking page's resources. This is required because
+  the T109 page-scope pass classifies page resources, not a form's own ones.
+- Reuses the shared classification helpers from `page_resource_inheritance.rs`
+  (`ResourceContext`, `unique_entry`, `resolve_reference`) and the
+  `PageXObjectResourceTarget`/`PageXObjectResourceSubtype`/
+  `SkippedPageXObjectResource` vocabulary. The subtype dispatch mirrors the
+  page inspector but is kept in this sibling module so the 771-line
+  `page_xobject_resources.rs` is not grown.
+- Copy budget: the report stores only structural metadata, small owned name
+  bytes, and byte-range skip records; it retains no PDF bytes, object bodies,
+  resource dictionaries, stream bodies, or decoded data. A skip-diagnostic test
+  asserts no source stream bytes leak into the debug report.
+- This is a supporting inspector for the umbrella-crate one-level form-content
+  inventory bridge (T110 `presslint` side); it opens nothing, resolves the
+  form's `/XObject` targets one level via the existing lookup machinery, and
+  mutates no bytes.
+
 ### T109 - Page `XObject` Resource Target Metadata
 
 - `PageXObjectResourcesInspection` now exposes deterministic

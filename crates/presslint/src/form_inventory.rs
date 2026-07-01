@@ -1,0 +1,470 @@
+//! One-level Form `XObject` content expansion for the PDF inventory bridge.
+//!
+//! A page-level Form `XObject` invocation (`/Fm Do`) is inventoried by
+//! [`presslint_inventory::build_inventory`] only as a `FormXObject` invocation
+//! entry; the colors, text, and vectors painted INSIDE the form stay invisible.
+//! This module walks a page-level form's OWN decoded content stream once,
+//! classifies the form's own `/Resources /XObject`, re-invokes `build_inventory`
+//! on the decoded form bytes in [`ContentScope::FormXObject`] with the ORIGINAL
+//! invoking page index, and merges the nested entries immediately after the
+//! form invocation entry.
+//!
+//! The walk is bounded by a [`FormWalkContext`] with `max_depth = 1`: nested
+//! forms inside a form are reported as an unwalked max-depth skip rather than
+//! descended, and a self-referential or cyclic form is reported as a cycle skip.
+//! Every per-form failure is a structured [`SkippedFormInventory`], never a page
+//! failure, panic, or infinite loop; the page's own inventory is always emitted.
+
+use std::collections::BTreeSet;
+
+use presslint_inventory::{
+    GraphicsStateEventKind, GraphicsWalkError, Inventory, InventoryEntry, build_inventory,
+    walk_graphics_state,
+};
+use presslint_pdf::{
+    IndirectRef, ObjectLookup, PageXObjectResourceTarget,
+    inspect_content_stream_data_extent_with_lookup, inspect_form_xobject_resources,
+};
+use presslint_syntax::{assemble_operators, tokenize};
+use presslint_types::{ContentScope, ObjectKind, PageIndex, PdfName};
+use serde::{Deserialize, Serialize};
+
+use crate::document_inventory::{InventoryPageSkip, decode_page_content, inventory_names};
+use crate::page_content::decode_content;
+use crate::pdf_inventory::PdfInventorySkip;
+
+/// Combined page inventory plus per-form expansion diagnostics for one page.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FormExpandedInventory {
+    /// Page inventory with nested form entries merged after their invocation.
+    pub inventory: Inventory,
+    /// Structured per-form expansion skips for this page, in content order.
+    pub form_skipped: Vec<SkippedFormInventory>,
+}
+
+/// One structured Form `XObject` expansion skip.
+///
+/// The page's own inventory is always produced; this records a page-level (or,
+/// for future deeper walks, nested) form whose content could not be inventoried.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SkippedFormInventory {
+    /// Resource name used to invoke the form.
+    pub name: PdfName,
+    /// Resolved indirect reference of the form stream object.
+    pub reference: IndirectRef,
+    /// Resolved form stream object byte offset.
+    pub object_byte_offset: usize,
+    /// Structured reason the form content was not inventoried.
+    pub reason: SkippedFormInventoryReason,
+}
+
+/// Structured reason a Form `XObject`'s own content was not inventoried.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "reason", rename_all = "snake_case")]
+pub enum SkippedFormInventoryReason {
+    /// The form re-invokes a form already on the active walk stack (self-ref or
+    /// cycle); descending would not terminate.
+    Cycle,
+    /// The bounded walk reached its configured maximum form nesting depth, so
+    /// this nested form was inventoried as an invocation but not descended.
+    MaxDepth {
+        /// Configured maximum form nesting depth for the walk.
+        max_depth: usize,
+    },
+    /// The form stream could not be located, decoded, tokenized, assembled, or
+    /// walked. Delegates to the shared content-skip vocabulary.
+    Content {
+        /// Delegated content-processing skip for the form stream.
+        skip: PdfInventorySkip,
+    },
+}
+
+/// Bounded walk context for one page's form expansion.
+///
+/// `max_depth` bounds form nesting (1 for this slice). `visited` keys the forms
+/// currently on the active descent path by resolved `(object_number,
+/// generation)` plus byte offset, so a form that re-invokes an ancestor is
+/// detected as a cycle without blocking legitimate sibling re-invocations.
+/// Because `visited` is inserted on descent and removed on ascent, its length is
+/// the current descent depth; `visited` already exists so a future deeper walk
+/// only raises `max_depth`.
+#[derive(Debug, Clone)]
+pub struct FormWalkContext {
+    max_depth: usize,
+    visited: BTreeSet<FormObjectKey>,
+}
+
+impl FormWalkContext {
+    /// Create a context bounded to `max_depth` levels of form nesting.
+    #[must_use]
+    pub const fn new(max_depth: usize) -> Self {
+        Self {
+            max_depth,
+            visited: BTreeSet::new(),
+        }
+    }
+
+    /// Create the one-level context used by the current inventory bridge.
+    #[must_use]
+    pub const fn one_level() -> Self {
+        Self::new(1)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct FormObjectKey {
+    object_number: u32,
+    generation: u16,
+    object_byte_offset: usize,
+}
+
+impl FormObjectKey {
+    const fn from_target(target: &PageXObjectResourceTarget) -> Self {
+        Self {
+            object_number: target.reference.object_number,
+            generation: target.reference.generation,
+            object_byte_offset: target.object_byte_offset,
+        }
+    }
+}
+
+/// Build a page's combined inventory with one-level Form `XObject` content
+/// expansion.
+///
+/// The page content is decoded, tokenized, assembled, and inventoried through
+/// the same page decode/tokenize/assemble path and
+/// [`presslint_inventory::build_inventory`] the page-only bridge used. When the
+/// page declares no form `XObject` resources this reduces to the page-only path
+/// with an empty skip list, so pages without form invocations are byte-for-byte
+/// unchanged. Otherwise each page-level form invocation entry is
+/// followed by the form's own inventory entries, rebased onto page-global
+/// sequence values that continue after the page's sequence space.
+///
+/// # Errors
+///
+/// Returns [`InventoryPageSkip`] only for page-level failures (page decode,
+/// tokenize, assemble, or graphics walk). Per-form failures are collected as
+/// [`SkippedFormInventory`] and never fail the page.
+#[allow(clippy::too_many_arguments)]
+pub fn build_page_inventory_with_forms(
+    input: &[u8],
+    lookup: ObjectLookup<'_>,
+    page: &presslint_pdf::DocumentPageContentExtentInspection,
+    page_index: PageIndex,
+    max_decoded_stream_bytes: usize,
+    page_image_names: &[PdfName],
+    page_form_names: &[PdfName],
+    form_targets: &[PageXObjectResourceTarget],
+    context: FormWalkContext,
+) -> Result<FormExpandedInventory, InventoryPageSkip> {
+    let (page_bytes, first_stream_offset) =
+        decode_page_content(input, page, max_decoded_stream_bytes)?;
+    let source = page_bytes.as_slice();
+    let tokens = tokenize(source).map_err(|error| InventoryPageSkip::TokenizeFailed {
+        object_byte_offset: first_stream_offset,
+        error,
+    })?;
+    let assembled =
+        assemble_operators(&tokens).map_err(|error| InventoryPageSkip::AssembleFailed {
+            object_byte_offset: first_stream_offset,
+            error,
+        })?;
+
+    let page_inventory = build_inventory(
+        source,
+        &assembled.records,
+        page_index,
+        &ContentScope::Page,
+        page_image_names,
+        page_form_names,
+    )
+    .map_err(|error| InventoryPageSkip::GraphicsWalkFailed {
+        object_byte_offset: first_stream_offset,
+        error,
+    })?;
+
+    // Fast path: a page with no classified form resources cannot invoke a form,
+    // so it needs no second walk and stays identical to the page-only bridge.
+    if page_form_names.is_empty() || form_targets.is_empty() {
+        return Ok(FormExpandedInventory {
+            inventory: page_inventory,
+            form_skipped: Vec::new(),
+        });
+    }
+
+    let invocation_names = form_invocation_names(
+        source,
+        &assembled.records,
+        page_image_names,
+        page_form_names,
+    )
+    .map_err(|error| InventoryPageSkip::GraphicsWalkFailed {
+        object_byte_offset: first_stream_offset,
+        error,
+    })?;
+
+    let mut expansion = FormExpansion {
+        input,
+        lookup,
+        page_index,
+        max_decoded_stream_bytes,
+        context,
+        next_sequence: usize_to_u32(page_inventory.len()),
+        entries: Vec::with_capacity(page_inventory.len()),
+        skipped: Vec::new(),
+    };
+    let mut invocation_iter = invocation_names.into_iter();
+    for entry in page_inventory.entries {
+        let is_form = entry.kind == ObjectKind::FormXObject;
+        expansion.entries.push(entry);
+        if is_form {
+            if let Some(name) = invocation_iter.next() {
+                if let Some(target) = find_form_target(form_targets, &name) {
+                    expansion.expand(&name, target);
+                }
+            }
+        }
+    }
+
+    Ok(FormExpandedInventory {
+        inventory: Inventory {
+            entries: expansion.entries,
+        },
+        form_skipped: expansion.skipped,
+    })
+}
+
+struct FormExpansion<'input> {
+    input: &'input [u8],
+    lookup: ObjectLookup<'input>,
+    page_index: PageIndex,
+    max_decoded_stream_bytes: usize,
+    context: FormWalkContext,
+    next_sequence: u32,
+    entries: Vec<InventoryEntry>,
+    skipped: Vec<SkippedFormInventory>,
+}
+
+impl<'input> FormExpansion<'input> {
+    /// Expand one form invocation, merging its own inventory entries (rebased
+    /// onto the page-global sequence space) after the current position.
+    fn expand(&mut self, name: &PdfName, target: &PageXObjectResourceTarget) {
+        let key = FormObjectKey::from_target(target);
+        if self.context.visited.contains(&key) {
+            self.push_skip(name, target, SkippedFormInventoryReason::Cycle);
+            return;
+        }
+        if self.context.visited.len() >= self.context.max_depth {
+            self.push_skip(
+                name,
+                target,
+                SkippedFormInventoryReason::MaxDepth {
+                    max_depth: self.context.max_depth,
+                },
+            );
+            return;
+        }
+
+        let Some((source, records)) = self.decode_form(name, target) else {
+            return;
+        };
+        let source = source.as_slice();
+
+        let form_resources =
+            inspect_form_xobject_resources(self.input, self.lookup, target.object_byte_offset);
+        let image_names = inventory_names(&form_resources.image_xobject_names);
+        let form_names = inventory_names(&form_resources.form_xobject_names);
+        let scope = ContentScope::FormXObject { name: name.clone() };
+
+        let form_inventory = match build_inventory(
+            source,
+            &records,
+            self.page_index,
+            &scope,
+            &image_names,
+            &form_names,
+        ) {
+            Ok(inventory) => inventory,
+            Err(error) => {
+                self.push_content_skip(
+                    name,
+                    target,
+                    PdfInventorySkip::GraphicsWalkFailed {
+                        object_byte_offset: target.object_byte_offset,
+                        error,
+                    },
+                );
+                return;
+            }
+        };
+        let nested_names = if form_names.is_empty() {
+            Vec::new()
+        } else {
+            match form_invocation_names(source, &records, &image_names, &form_names) {
+                Ok(names) => names,
+                Err(error) => {
+                    self.push_content_skip(
+                        name,
+                        target,
+                        PdfInventorySkip::GraphicsWalkFailed {
+                            object_byte_offset: target.object_byte_offset,
+                            error,
+                        },
+                    );
+                    return;
+                }
+            }
+        };
+
+        self.context.visited.insert(key);
+        let mut nested_iter = nested_names.into_iter();
+        for mut entry in form_inventory.entries {
+            let is_form = entry.kind == ObjectKind::FormXObject;
+            entry.id.sequence = self.next_sequence;
+            self.next_sequence = self.next_sequence.saturating_add(1);
+            self.entries.push(entry);
+            if is_form {
+                if let Some(nested_name) = nested_iter.next() {
+                    if let Some(nested_target) =
+                        find_form_target(&form_resources.form_xobjects, &nested_name)
+                    {
+                        self.expand(&nested_name, nested_target);
+                    }
+                }
+            }
+        }
+        self.context.visited.remove(&key);
+    }
+
+    /// Locate, decode, tokenize, and assemble a form stream through the shared
+    /// page filter/decode machinery, recording a structured skip on failure.
+    fn decode_form(
+        &mut self,
+        name: &PdfName,
+        target: &PageXObjectResourceTarget,
+    ) -> Option<(
+        crate::page_content::PageContentBytes<'input>,
+        Vec<presslint_syntax::OperatorRecord>,
+    )> {
+        let extent = match inspect_content_stream_data_extent_with_lookup(
+            self.input,
+            Some(self.lookup),
+            target.object_byte_offset,
+        ) {
+            Ok(extent) => extent,
+            Err(error) => {
+                self.push_content_skip(
+                    name,
+                    target,
+                    PdfInventorySkip::ExtentFailed {
+                        object_byte_offset: target.object_byte_offset,
+                        error,
+                    },
+                );
+                return None;
+            }
+        };
+        let content = match decode_content(
+            self.input,
+            target.object_byte_offset,
+            &extent,
+            self.max_decoded_stream_bytes,
+        ) {
+            Ok(content) => content,
+            Err(skip) => {
+                self.push_content_skip(name, target, skip.into());
+                return None;
+            }
+        };
+        let tokens = match tokenize(content.as_slice()) {
+            Ok(tokens) => tokens,
+            Err(error) => {
+                self.push_content_skip(
+                    name,
+                    target,
+                    PdfInventorySkip::TokenizeFailed {
+                        object_byte_offset: target.object_byte_offset,
+                        error,
+                    },
+                );
+                return None;
+            }
+        };
+        let assembled = match assemble_operators(&tokens) {
+            Ok(assembled) => assembled,
+            Err(error) => {
+                self.push_content_skip(
+                    name,
+                    target,
+                    PdfInventorySkip::AssembleFailed {
+                        object_byte_offset: target.object_byte_offset,
+                        error,
+                    },
+                );
+                return None;
+            }
+        };
+        Some((content, assembled.records))
+    }
+
+    fn push_content_skip(
+        &mut self,
+        name: &PdfName,
+        target: &PageXObjectResourceTarget,
+        skip: PdfInventorySkip,
+    ) {
+        self.push_skip(name, target, SkippedFormInventoryReason::Content { skip });
+    }
+
+    fn push_skip(
+        &mut self,
+        name: &PdfName,
+        target: &PageXObjectResourceTarget,
+        reason: SkippedFormInventoryReason,
+    ) {
+        self.skipped.push(SkippedFormInventory {
+            name: name.clone(),
+            reference: target.reference,
+            object_byte_offset: target.object_byte_offset,
+            reason,
+        });
+    }
+}
+
+/// Collect, in content order, the resource names of form `Do` invocations that
+/// [`build_inventory`] classifies as form entries: an `XObject` invocation whose
+/// name is in `form_names` and not in `image_names` (image classification wins).
+///
+/// The returned names align one-to-one with the `FormXObject`-kind entries
+/// `build_inventory` emits over the same records, so callers can pair each form
+/// invocation entry with its invoking name.
+fn form_invocation_names(
+    source: &[u8],
+    records: &[presslint_syntax::OperatorRecord],
+    image_names: &[PdfName],
+    form_names: &[PdfName],
+) -> Result<Vec<PdfName>, GraphicsWalkError> {
+    let events = walk_graphics_state(source, records)?;
+    Ok(events
+        .into_iter()
+        .filter_map(|event| match event.kind {
+            GraphicsStateEventKind::XObjectInvoke { name }
+                if form_names.contains(&name) && !image_names.contains(&name) =>
+            {
+                Some(name)
+            }
+            _ => None,
+        })
+        .collect())
+}
+
+fn find_form_target<'a>(
+    targets: &'a [PageXObjectResourceTarget],
+    name: &PdfName,
+) -> Option<&'a PageXObjectResourceTarget> {
+    targets.iter().find(|target| target.name.0 == name.0)
+}
+
+fn usize_to_u32(value: usize) -> u32 {
+    u32::try_from(value).unwrap_or(u32::MAX)
+}

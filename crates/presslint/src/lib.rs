@@ -15,6 +15,7 @@
 //! ```
 
 mod document_inventory;
+mod form_inventory;
 mod page_content;
 mod pdf_inventory;
 mod pdf_query;
@@ -26,6 +27,10 @@ pub use document_inventory::{
     ClassicPdfInventory, ClassicPdfInventoryError, ClassicPdfInventoryPage,
     ClassicPdfInventoryPageResult, ClassicPdfInventoryRejection, ClassicPdfInventorySkip,
     build_classic_pdf_inventory,
+};
+pub use form_inventory::{
+    FormExpandedInventory, FormWalkContext, SkippedFormInventory, SkippedFormInventoryReason,
+    build_page_inventory_with_forms,
 };
 pub use pdf_inventory::{
     PdfInventory, PdfInventoryError, PdfInventoryPage, PdfInventoryPageResult,
