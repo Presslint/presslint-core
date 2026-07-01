@@ -50,3 +50,8 @@ scripts/check_licenses.sh
 The script reads `cargo metadata --format-version 1 --locked`, skips workspace
 path packages, and fails closed for third-party packages with missing,
 forbidden, or unlisted license identifiers.
+
+## Internal Dependencies
+
+`presslint-actions` depends on the first-party `presslint-pdf` crate for
+`IndirectRef` and `IndirectObjectEditDecision` in mutation-boundary contracts.

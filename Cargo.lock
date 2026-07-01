@@ -251,6 +251,7 @@ version = "0.0.1"
 dependencies = [
  "criterion",
  "presslint-inventory",
+ "presslint-pdf",
  "presslint-selectors",
  "presslint-syntax",
  "presslint-types",

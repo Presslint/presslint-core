@@ -61,6 +61,35 @@
   harness modeled on `presslint-selectors` and extended with `bool`/`f64`
   scalars for the action payloads. `src/lib.rs` holds production code only. No
   `serde_json` or other dependency is added.
+- T116 typed the public `MutationBoundary` contract as a four-variant
+  serde-tagged enum in `src/patch.rs`: `ContentStreamOperand`,
+  `DictionaryEntry`, `WholeStream`, and `IndirectObjectClone`, with supporting
+  enums for dictionary operations, value locators, value provenance, and planned
+  object allocation. The old `ContentStream` boundary was renamed to
+  `ContentStreamOperand`; live planning still emits only that variant.
+- The three indirect-object boundary variants are contract-only shapes for the
+  future incremental-update executor and are currently exercised only by serde
+  shape tests. They carry concrete `presslint_pdf::IndirectRef` values and
+  non-optional `IndirectObjectEditDecision` ownership decisions.
+- `presslint-actions` now has a normal first-party dependency on
+  `presslint-pdf` for `IndirectRef` and `IndirectObjectEditDecision`. The
+  dependency direction remains `actions -> pdf -> types`; no cycle is
+  introduced.
+- `ContentStreamOperand.ownership` is optional because the live inventory
+  `ObjectId` is a content-derived identity, not a PDF indirect reference. The
+  planner records `ownership: None` instead of synthesizing a fake reference or
+  decision.
+- `MutationBoundary` and `PlannedPatch` intentionally keep `PartialEq` but no
+  longer derive `Eq`, because `PlannedValueProvenance::ActionGenerated` carries
+  `Action`, and some action payloads contain `f64`.
+- This is a data-shape contract change only. Target selection, patch selection,
+  skip taxonomy, emitted target order, and emitted patch order are unchanged;
+  no hot-path impact is expected and no new benchmark was added.
+- Added `docs/mutation-boundary-contract.md` as public design notes for the
+  boundary model and the shared-object ownership rule. F3b remains next:
+  `IncrementalRevisionPlan` / dirty-object revision-plan contracts plus
+  `docs/incremental-update-contract.md`, still contract-only and with no byte
+  mutation until an explicit go-ahead.
 
 ## Follow-Ups
 

@@ -23,6 +23,7 @@ pub(super) enum Json {
     U32(u32),
     F64(f64),
     Bool(bool),
+    Null,
 }
 
 impl Json {
@@ -145,7 +146,7 @@ impl ser::Serializer for JsonSerializer {
     }
 
     fn serialize_none(self) -> Result<Self::Ok, Self::Error> {
-        Err(Self::Error::custom("unsupported null JSON value"))
+        Ok(Json::Null)
     }
 
     fn serialize_some<T: ?Sized + Serialize>(self, value: &T) -> Result<Self::Ok, Self::Error> {
@@ -393,6 +394,14 @@ impl<'de> de::Deserializer<'de> for Json {
             Self::U32(value) => visitor.visit_u32(value),
             Self::F64(value) => visitor.visit_f64(value),
             Self::Bool(value) => visitor.visit_bool(value),
+            Self::Null => visitor.visit_unit(),
+        }
+    }
+
+    fn deserialize_option<V: de::Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
+        match self {
+            Self::Null => visitor.visit_none(),
+            value => visitor.visit_some(value),
         }
     }
 
@@ -418,7 +427,7 @@ impl<'de> de::Deserializer<'de> for Json {
 
     forward_to_deserialize_any! {
         bool i8 i16 i32 i64 u8 u16 u32 u64 f32 f64 char str string bytes
-        byte_buf option unit unit_struct seq tuple tuple_struct map struct
+        byte_buf unit unit_struct seq tuple tuple_struct map struct
         identifier ignored_any
     }
 }

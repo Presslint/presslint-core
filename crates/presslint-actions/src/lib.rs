@@ -2,10 +2,17 @@
 
 #![forbid(unsafe_code)]
 
+mod patch;
+
 use presslint_inventory::{Inventory, InventoryEntry};
 use presslint_selectors::{Selector, matches as selector_matches};
-use presslint_types::{ByteRange, ColorSpace, ContentScope, EditCapability, ObjectId, PageIndex};
+use presslint_types::{ColorSpace, EditCapability, ObjectId};
 use serde::{Deserialize, Serialize};
+
+pub use patch::{
+    DictionaryEntryOp, DictionaryValueLocator, MutationBoundary, PlannedObjectAllocation,
+    PlannedValueProvenance,
+};
 
 /// Versioned recipe document.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -112,7 +119,7 @@ pub struct ActionPlan {
 }
 
 /// Report-only patch request for a selected target.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PlannedPatch {
     /// Selected object the future patch would apply to.
     pub object: ObjectId,
@@ -120,21 +127,6 @@ pub struct PlannedPatch {
     pub capability: EditCapability,
     /// Narrow source boundary a future executor would be allowed to edit.
     pub boundary: MutationBoundary,
-}
-
-/// Serializable boundary for a future mutation.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum MutationBoundary {
-    /// Range in one decoded content stream record.
-    ContentStream {
-        /// Page where the editable content stream was observed.
-        page: PageIndex,
-        /// Stable content scope identifier.
-        scope: ContentScope,
-        /// Byte range of the sourced operator record.
-        range: ByteRange,
-    },
 }
 
 /// Matched inventory entry skipped during planning.
@@ -187,7 +179,10 @@ const fn is_process_space(space: &ColorSpace) -> bool {
 ///
 /// `ConvertColor` additionally requires exactly one sourced process device
 /// color observation.
-fn convert_color_boundary(entry: &InventoryEntry) -> Result<MutationBoundary, SkipReason> {
+fn convert_color_boundary(
+    entry: &InventoryEntry,
+    action: Action,
+) -> Result<MutationBoundary, SkipReason> {
     let mut has_process_color = false;
     let mut missing_source = false;
     let mut ambiguous_source = false;
@@ -211,11 +206,15 @@ fn convert_color_boundary(entry: &InventoryEntry) -> Result<MutationBoundary, Sk
         Err(SkipReason::MissingColorSource)
     } else if ambiguous_source {
         Err(SkipReason::AmbiguousColorSource)
-    } else if let Some(range) = source {
-        Ok(MutationBoundary::ContentStream {
+    } else if let Some(record_range) = source {
+        Ok(MutationBoundary::ContentStreamOperand {
             page: entry.provenance.page,
             scope: entry.provenance.scope.clone(),
-            range,
+            record_range,
+            operand_range: None,
+            operator_range: None,
+            ownership: None,
+            value_provenance: PlannedValueProvenance::ActionGenerated { action },
         })
     } else {
         Err(SkipReason::MissingColorSource)
@@ -229,7 +228,7 @@ fn plan_patch_for_action(
 ) -> Result<Option<PlannedPatch>, SkipReason> {
     match action {
         Action::ConvertColor(_) => {
-            let boundary = convert_color_boundary(entry)?;
+            let boundary = convert_color_boundary(entry, action.clone())?;
             Ok(Some(PlannedPatch {
                 object: entry.id.clone(),
                 capability: required,

@@ -9,6 +9,7 @@ description = "Serializable action and recipe model for presslint."
 
 [dependencies]
 presslint-types.workspace = true
+presslint-pdf.workspace = true
 presslint-inventory.workspace = true
 presslint-selectors.workspace = true
 serde.workspace = true
