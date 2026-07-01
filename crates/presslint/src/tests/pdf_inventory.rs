@@ -1,3 +1,4 @@
+mod multi_stream;
 #[path = "../../../presslint-pdf/src/tests/content_stream_extent/serde_harness.rs"]
 mod serde_harness;
 
@@ -308,18 +309,17 @@ fn invalid_xref_stream_prev_is_top_level_document_access_rejection() -> Result<(
 }
 
 #[test]
-fn neutral_bridge_skips_multi_stream_page_without_concatenating() -> Result<(), PdfInventoryError> {
+fn neutral_bridge_inventories_raw_multi_stream_page() -> Result<(), PdfInventoryError> {
     let source = multi_stream_page_pdf();
 
     let report = build_pdf_inventory(&source, 1024)?;
 
     assert_eq!(
         report.pages[0].result,
-        PdfInventoryPageResult::Skipped {
-            reason: PdfInventorySkip::MultipleContentStreams { stream_count: 2 }
-        }
+        PdfInventoryPageResult::Inventoried { entry_count: 1 }
     );
-    assert!(report.inventory.is_empty());
+    assert_eq!(report.inventory.len(), 1);
+    assert_eq!(report.inventory.entries[0].kind, ObjectKind::Vector);
     Ok(())
 }
 

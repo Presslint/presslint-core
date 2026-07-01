@@ -6,14 +6,14 @@ use presslint_pdf::{
     ContentStreamFilterClassification, ContentStreamFilterClassificationError,
     DocumentPageContentExtentInspection, DocumentPageContentExtentResult,
     DocumentPageContentExtentsInspectionError, FlateDecodeParametersResolution,
-    FlateDecodeParametersResolutionError, FlateDecodeStreamError, PageContentExtentInspection,
-    SkippedPageContentTargetReason, classify_content_stream_filter, content_stream_data_slice,
-    decode_flate_stream, inspect_classic_document_access, inspect_document_page_content_extents,
-    resolve_flate_decode_parameters,
+    FlateDecodeParametersResolutionError, FlateDecodeStreamError, SkippedPageContentTargetReason,
+    inspect_classic_document_access, inspect_document_page_content_extents,
 };
 use presslint_syntax::{AssembleError, TokenizeError, assemble_operators, tokenize};
 use presslint_types::{ContentScope, PageIndex};
 use serde::{Deserialize, Serialize};
+
+use crate::page_content::page_content_bytes;
 
 /// Result of building inventory from a classic-xref PDF.
 ///
@@ -43,7 +43,7 @@ pub struct ClassicPdfInventoryPage {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum ClassicPdfInventoryPageResult {
-    /// The page had exactly one supported content stream and was inventoried.
+    /// The page had supported content streams and was inventoried.
     Inventoried {
         /// Number of entries emitted for this page.
         entry_count: usize,
@@ -71,12 +71,12 @@ pub enum ClassicPdfInventorySkip {
         /// Number of content targets reported for this page.
         stream_count: usize,
     },
-    /// The single target could not be resolved through the classic xref table.
+    /// A content-stream target could not be resolved through the classic xref table.
     TargetSkipped {
         /// Delegated target skip reason.
         reason: SkippedPageContentTargetReason,
     },
-    /// The single resolved target's stream extent could not be located.
+    /// A resolved content-stream target's stream extent could not be located.
     ExtentFailed {
         /// Resolved content-stream object byte offset.
         object_byte_offset: usize,
@@ -183,15 +183,16 @@ pub enum ClassicPdfInventoryRejection {
 ///
 /// The bridge accepts borrowed PDF bytes and never mutates them. It establishes
 /// the existing classic-xref document-access path, locates page content-stream
-/// data extents, and inventories only pages with exactly one located content
-/// stream whose decode path is raw or a single `/FlateDecode` with resolved
-/// non-array `/DecodeParms`.
+/// data extents, and inventories pages whose located content streams are raw or
+/// individual `/FlateDecode` streams with resolved non-array `/DecodeParms`.
 ///
 /// Raw streams are passed to syntax and inventory as borrowed slices. Flate
 /// streams allocate only the bounded decoded buffer returned by
-/// [`presslint_pdf::decode_flate_stream`]. Resource dictionaries are not
-/// inspected in this slice, so empty image and form `XObject` name lists are
-/// supplied to the combined inventory builder.
+/// [`presslint_pdf::decode_flate_stream`]. Multiple decoded streams are joined
+/// with an explicit whitespace separator into one bounded synthetic page
+/// content buffer before tokenization. Resource dictionaries are not inspected
+/// in this slice, so empty image and form `XObject` name lists are supplied to
+/// the combined inventory builder.
 ///
 /// Page indexes in the returned report are zero-based document-order ordinals.
 ///
@@ -268,44 +269,28 @@ pub fn build_page_inventory(
     if extents.entries.is_empty() {
         return Err(InventoryPageSkip::NoContentStreams);
     }
-    if extents.entries.len() > 1 {
-        return Err(InventoryPageSkip::MultipleContentStreams {
-            stream_count: extents.entries.len(),
-        });
-    }
-
-    let stream = match &extents.entries[0] {
-        PageContentExtentInspection::Located {
-            object_byte_offset,
-            extent,
-            ..
-        } => (*object_byte_offset, extent),
-        PageContentExtentInspection::Skipped { reason, .. } => {
-            return Err(InventoryPageSkip::TargetSkipped {
-                reason: reason.clone(),
-            });
-        }
-        PageContentExtentInspection::Failed {
-            object_byte_offset,
-            error,
-            ..
-        } => {
-            return Err(InventoryPageSkip::ExtentFailed {
-                object_byte_offset: *object_byte_offset,
-                error: error.clone(),
-            });
-        }
-    };
-
-    let content = decode_content(input, stream.0, stream.1, max_decoded_stream_bytes)?;
+    let first_stream_offset = extents
+        .entries
+        .iter()
+        .find_map(|entry| match entry {
+            presslint_pdf::PageContentExtentInspection::Located {
+                object_byte_offset, ..
+            }
+            | presslint_pdf::PageContentExtentInspection::Failed {
+                object_byte_offset, ..
+            } => Some(*object_byte_offset),
+            presslint_pdf::PageContentExtentInspection::Skipped { .. } => None,
+        })
+        .unwrap_or_default();
+    let content = page_content_bytes(input, &extents.entries, max_decoded_stream_bytes)?;
     let source = content.as_slice();
     let tokens = tokenize(source).map_err(|error| InventoryPageSkip::TokenizeFailed {
-        object_byte_offset: stream.0,
+        object_byte_offset: first_stream_offset,
         error,
     })?;
     let assembled =
         assemble_operators(&tokens).map_err(|error| InventoryPageSkip::AssembleFailed {
-            object_byte_offset: stream.0,
+            object_byte_offset: first_stream_offset,
             error,
         })?;
     let inventory = build_inventory(
@@ -317,76 +302,11 @@ pub fn build_page_inventory(
         &[],
     )
     .map_err(|error| InventoryPageSkip::GraphicsWalkFailed {
-        object_byte_offset: stream.0,
+        object_byte_offset: first_stream_offset,
         error,
     })?;
 
     Ok(inventory)
-}
-
-enum ContentBytes<'input> {
-    Borrowed(&'input [u8]),
-    Owned(Vec<u8>),
-}
-
-impl ContentBytes<'_> {
-    fn as_slice(&self) -> &[u8] {
-        match self {
-            Self::Borrowed(bytes) => bytes,
-            Self::Owned(bytes) => bytes,
-        }
-    }
-}
-
-fn decode_content<'input>(
-    input: &'input [u8],
-    object_byte_offset: usize,
-    extent: &presslint_pdf::ContentStreamDataExtentInspection,
-    max_decoded_stream_bytes: usize,
-) -> Result<ContentBytes<'input>, InventoryPageSkip> {
-    let stream_data = content_stream_data_slice(input, extent).map_err(|error| {
-        InventoryPageSkip::SliceFailed {
-            object_byte_offset,
-            error,
-        }
-    })?;
-
-    match classify_content_stream_filter(input, object_byte_offset).map_err(|error| {
-        InventoryPageSkip::FilterClassificationFailed {
-            object_byte_offset,
-            error,
-        }
-    })? {
-        ContentStreamFilterClassification::Uncompressed => Ok(ContentBytes::Borrowed(stream_data)),
-        ContentStreamFilterClassification::Flate => {
-            let resolution =
-                resolve_flate_decode_parameters(input, object_byte_offset).map_err(|error| {
-                    InventoryPageSkip::DecodeParmsFailed {
-                        object_byte_offset,
-                        error,
-                    }
-                })?;
-            let FlateDecodeParametersResolution::Resolved { parameters, .. } = resolution else {
-                return Err(InventoryPageSkip::UnsupportedDecodeParms {
-                    object_byte_offset,
-                    resolution,
-                });
-            };
-            let decoded = decode_flate_stream(stream_data, parameters, max_decoded_stream_bytes)
-                .map_err(|error| InventoryPageSkip::DecodeFailed {
-                    object_byte_offset,
-                    error,
-                })?;
-            Ok(ContentBytes::Owned(decoded))
-        }
-        classification @ (ContentStreamFilterClassification::UnsupportedFilter { .. }
-        | ContentStreamFilterClassification::UnsupportedFilterChain { .. }) => {
-            Err(InventoryPageSkip::UnsupportedFilter {
-                object_byte_offset,
-                classification,
-            })
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

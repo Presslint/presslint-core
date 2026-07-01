@@ -15,6 +15,7 @@
 //! ```
 
 mod document_inventory;
+mod page_content;
 mod pdf_inventory;
 
 pub use presslint_types::*;

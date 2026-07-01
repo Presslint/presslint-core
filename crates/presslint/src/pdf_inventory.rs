@@ -42,7 +42,7 @@ pub struct PdfInventoryPage {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum PdfInventoryPageResult {
-    /// The page had exactly one supported content stream and was inventoried.
+    /// The page had supported content streams and was inventoried.
     Inventoried {
         /// Number of entries emitted for this page.
         entry_count: usize,
@@ -70,12 +70,12 @@ pub enum PdfInventorySkip {
         /// Number of content targets reported for this page.
         stream_count: usize,
     },
-    /// The single target could not be resolved through the selected backend.
+    /// A content-stream target could not be resolved through the selected backend.
     TargetSkipped {
         /// Delegated target skip reason.
         reason: SkippedPageContentTargetReason,
     },
-    /// The single resolved target's stream extent could not be located.
+    /// A resolved content-stream target's stream extent could not be located.
     ExtentFailed {
         /// Resolved content-stream object byte offset.
         object_byte_offset: usize,
@@ -188,11 +188,13 @@ pub enum PdfInventoryRejection {
 /// content-stream data extents through
 /// [`inspect_document_page_content_extents_with_lookup`].
 ///
-/// Raw streams are passed to syntax and inventory as borrowed slices. Flate
-/// streams allocate only the bounded decoded buffer returned by
-/// [`presslint_pdf::decode_flate_stream`]. Resource dictionaries are not
-/// inspected in this slice, so empty image and form `XObject` name lists are
-/// supplied to the combined inventory builder by the shared page helper.
+/// Raw single streams are passed to syntax and inventory as borrowed slices.
+/// Flate streams allocate only the bounded decoded buffer returned by
+/// [`presslint_pdf::decode_flate_stream`]. Multiple decoded streams are joined
+/// with an explicit whitespace separator into one bounded synthetic page
+/// content buffer before tokenization. Resource dictionaries are not inspected
+/// in this slice, so empty image and form `XObject` name lists are supplied to
+/// the combined inventory builder by the shared page helper.
 ///
 /// # Errors
 ///

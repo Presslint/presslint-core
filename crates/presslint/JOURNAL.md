@@ -1,5 +1,23 @@
 # presslint Journal
 
+## T105 - Multi-Stream Page Content Inventory
+
+- `build_page_inventory` now inventories pages with multiple located content
+  streams when every stream is supported and decodable, so both
+  `build_pdf_inventory` and `build_classic_pdf_inventory` get the behavior
+  through the shared helper.
+- Added the private `page_content` helper: a single raw stream still returns a
+  borrowed source slice, while Flate streams allocate only their bounded decoded
+  output and multi-stream pages allocate one bounded joined page-content buffer.
+- Multi-stream joins insert an explicit whitespace byte between decoded streams
+  before tokenization, and the remaining decode budget is enforced across the
+  whole joined page content, including separators.
+- Unsupported filters, target/extent failures, decode failures, tokenizer,
+  assembler, and graphics-walk failures continue to surface as deterministic
+  structured page skips. `MultipleContentStreams` remains in the public skip
+  enums for serde compatibility, but decodable multi-stream pages no longer emit
+  it.
+
 ## T104 - Classic Incremental-Update Inventory End-to-End
 
 - `build_pdf_inventory` now inventories classic incrementally-updated PDFs

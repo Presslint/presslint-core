@@ -24,13 +24,36 @@ fn single_page_pdf(content_dict_suffix: &[u8], content_data: &[u8]) -> Vec<u8> {
 }
 
 fn multi_stream_page_pdf() -> Vec<u8> {
+    multi_stream_page_pdf_with_streams(b"", b"q\n0 0 1 rg\n12 12 80 80 re\n", b"", b"f\nQ")
+}
+
+fn multi_stream_page_pdf_with_streams(
+    first_dict_suffix: &[u8],
+    first_data: &[u8],
+    second_dict_suffix: &[u8],
+    second_data: &[u8],
+) -> Vec<u8> {
     let catalog = b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n";
     let pages = b"2 0 obj\n<< /Type /Pages /Kids [ 3 0 R ] /Count 1 >>\nendobj\n";
     let page = b"3 0 obj\n<< /Type /Page /Parent 2 0 R /Contents [ 4 0 R 5 0 R ] >>\nendobj\n";
-    let first = b"4 0 obj\n<< /Length 1 >>\nstream\nq\nendstream\nendobj\n";
-    let second = b"5 0 obj\n<< /Length 1 >>\nstream\nQ\nendstream\nendobj\n";
 
-    classic_pdf(&[catalog, pages, page, first, second])
+    let mut first = Vec::new();
+    first.extend_from_slice(b"4 0 obj\n<< /Length ");
+    first.extend_from_slice(first_data.len().to_string().as_bytes());
+    first.extend_from_slice(first_dict_suffix);
+    first.extend_from_slice(b" >>\nstream\n");
+    first.extend_from_slice(first_data);
+    first.extend_from_slice(b"\nendstream\nendobj\n");
+
+    let mut second = Vec::new();
+    second.extend_from_slice(b"5 0 obj\n<< /Length ");
+    second.extend_from_slice(second_data.len().to_string().as_bytes());
+    second.extend_from_slice(second_dict_suffix);
+    second.extend_from_slice(b" >>\nstream\n");
+    second.extend_from_slice(second_data);
+    second.extend_from_slice(b"\nendstream\nendobj\n");
+
+    classic_pdf(&[catalog, pages, page, &first, &second])
 }
 
 fn classic_pdf(objects: &[&[u8]]) -> Vec<u8> {
@@ -129,7 +152,7 @@ fn skips_malformed_content_stream() -> Result<(), ClassicPdfInventoryError> {
 }
 
 #[test]
-fn skips_multi_stream_page_without_concatenating() -> Result<(), ClassicPdfInventoryError> {
+fn builds_inventory_from_raw_multi_stream_page() -> Result<(), ClassicPdfInventoryError> {
     let source = multi_stream_page_pdf();
 
     let report = build_classic_pdf_inventory(&source, 1024)?;
@@ -137,10 +160,9 @@ fn skips_multi_stream_page_without_concatenating() -> Result<(), ClassicPdfInven
     assert_eq!(report.pages.len(), 1);
     assert_eq!(
         report.pages[0].result,
-        ClassicPdfInventoryPageResult::Skipped {
-            reason: ClassicPdfInventorySkip::MultipleContentStreams { stream_count: 2 }
-        }
+        ClassicPdfInventoryPageResult::Inventoried { entry_count: 1 }
     );
-    assert!(report.inventory.is_empty());
+    assert_eq!(report.inventory.len(), 1);
+    assert_eq!(report.inventory.entries[0].kind, ObjectKind::Vector);
     Ok(())
 }
